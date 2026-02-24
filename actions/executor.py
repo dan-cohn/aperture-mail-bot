@@ -67,6 +67,9 @@ async def execute(
     else:
         logger.warning(f"Unknown action '{action}' for message {message_id} — taking no action.")
 
+    # Always log to Firestore for the dashboard (best-effort)
+    _log_triage(db, triage, message_id, thread_id, sender, subject, action)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -100,3 +103,33 @@ def _enqueue_summary(
         }
     )
     logger.debug(f"Enqueued summary: message={message_id} cat={triage.category}")
+
+
+def _log_triage(
+    db: firestore.Client,
+    triage: TriageResult,
+    message_id: str,
+    thread_id: str,
+    sender: str,
+    subject: str,
+    action: str,
+) -> None:
+    """Append a triage record to aperture_triage_log for the dashboard."""
+    try:
+        db.collection("aperture_triage_log").add(
+            {
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "sender": sender,
+                "subject": subject,
+                "category": triage.category,
+                "category_name": triage.category_name,
+                "action": action,
+                "is_urgent": triage.is_urgent,
+                "summary": triage.summary,
+                "reasoning": triage.reasoning,
+                "processed_at": firestore.SERVER_TIMESTAMP,
+            }
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to write triage log for {message_id}: {exc}")
