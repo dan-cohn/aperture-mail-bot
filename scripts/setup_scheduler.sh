@@ -95,6 +95,13 @@ create_or_update_job \
   "$SERVICE_URL/internal/renew-watch" \
   "Aperture: renew Gmail watch (every 5 days)"
 
+# ── Snooze processor — every 15 minutes ──────────────────────────────────────
+create_or_update_job \
+  "aperture-process-snoozes" \
+  "*/15 * * * *" \
+  "$SERVICE_URL/internal/process-snoozes" \
+  "Aperture: re-fire expired snooze alerts (every 15 min)"
+
 echo ""
 echo "=== Scheduler Jobs Created ==="
 gcloud scheduler jobs list --location="$REGION" --project="$PROJECT_ID" \

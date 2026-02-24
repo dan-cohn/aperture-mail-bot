@@ -21,7 +21,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dashboard.data import (
+    confirm_correction,
+    discard_correction,
     get_control_state,
+    get_corrections,
     get_db,
     get_subscription_state,
     get_summary_queue,
@@ -125,9 +128,16 @@ st.header("Aperture Dashboard")
 log = get_triage_log(db)
 queue = get_summary_queue(db)
 
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["📊 Overview", "📜 Recent Activity", "🔕 Silent Actions", "📋 Digest Queue"]
-)
+corrections = get_corrections(db)
+pending_corrections = [c for c in corrections if not c.get("confirmed")]
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Overview",
+    "📜 Recent Activity",
+    "🔕 Silent Actions",
+    "📋 Digest Queue",
+    f"✏️ Corrections {'🔴' if pending_corrections else ''}",
+])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
 
@@ -329,3 +339,57 @@ with tab4:
             use_container_width=True,
             hide_index=True,
         )
+
+
+# ── Tab 5: Corrections ────────────────────────────────────────────────────────
+
+with tab5:
+    st.caption(
+        "Corrections submitted via the ❌ Wrong Category button in Telegram. "
+        "**Confirm** to inject into the live triage prompt. **Discard** to remove."
+    )
+
+    if not corrections:
+        st.info("No corrections yet. Tap ❌ Wrong Category on a Telegram alert to create one.")
+    else:
+        # ── Pending (unconfirmed) ──────────────────────────────────────────────
+        if pending_corrections:
+            st.subheader(f"Pending Review ({len(pending_corrections)})")
+            for c in pending_corrections:
+                with st.container(border=True):
+                    col1, col2 = st.columns([5, 1])
+                    with col1:
+                        st.markdown(
+                            f"**From:** {c.get('sender', '')[:70]}  \n"
+                            f"**Subject:** {c.get('subject', '')[:80]}  \n"
+                            f"**Was:** [{c['wrong_category']}] {c['wrong_category_name']}  →  "
+                            f"**Should be:** [{c['correct_category']}] {c['correct_category_name']}"
+                        )
+                        if c.get("snippet"):
+                            st.caption(f"_{c['snippet'][:120]}_")
+                    with col2:
+                        doc_id = c["_doc_id"]
+                        if st.button("✅ Confirm", key=f"confirm_{doc_id}", use_container_width=True):
+                            confirm_correction(doc_id, db)
+                            st.success("Confirmed — live in next triage call.")
+                            st.rerun()
+                        if st.button("🗑 Discard", key=f"discard_{doc_id}", use_container_width=True):
+                            discard_correction(doc_id, db)
+                            st.rerun()
+        else:
+            st.success("No pending corrections — all reviewed.")
+
+        # ── Confirmed (active) ────────────────────────────────────────────────
+        confirmed = [c for c in corrections if c.get("confirmed")]
+        if confirmed:
+            st.divider()
+            st.subheader(f"Active Corrections ({len(confirmed)})  — injected into every triage call")
+            rows = []
+            for c in confirmed:
+                rows.append({
+                    "From":       c.get("sender", "")[:50],
+                    "Subject":    c.get("subject", "")[:60],
+                    "Was":        f"[{c['wrong_category']}] {c['wrong_category_name']}",
+                    "Correct":    f"[{c['correct_category']}] {c['correct_category_name']}",
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
     telegram_chat_id: str
+    telegram_webhook_secret: str = ""  # set via TELEGRAM_WEBHOOK_SECRET in .env
 
     # LLM
     gemini_api_key: str

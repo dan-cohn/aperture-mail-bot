@@ -16,7 +16,9 @@ from gmail.client import build_gmail_service
 from gmail.pubsub_handler import process_notification
 from gmail.watch import setup_watch
 from notifications.telegram import TelegramNotifier
+from notifications.telegram_webhook import handle_callback
 from scheduler.digest import send_digest
+from scheduler.snooze import process_snoozes
 from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
 from triage.llm_client import get_triage_client
 
@@ -41,7 +43,7 @@ async def lifespan(app: FastAPI):
         database=settings.firestore_database,
     )
     telegram = TelegramNotifier()
-    triage_client = get_triage_client()
+    triage_client = get_triage_client(db=db)   # pass db for dynamic corrections
     logger.info(
         f"Ready | project={settings.gcp_project_id} "
         f"| db={settings.firestore_database} "
@@ -54,7 +56,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Aperture",
     description="Personal Gmail Triage Agent",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -62,10 +64,6 @@ app = FastAPI(
 # ── Auth dependency for internal endpoints ────────────────────────────────────
 
 async def verify_internal_secret(x_aperture_secret: str = Header(...)):
-    """
-    Protects /internal/* endpoints.
-    Cloud Scheduler sends the secret via the X-Aperture-Secret header.
-    """
     if not settings.internal_secret:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -92,9 +90,7 @@ async def health_check():
 async def gmail_webhook(request: Request):
     """
     Receives Gmail push notifications forwarded by Google Pub/Sub.
-
     Always returns 204 to prevent Pub/Sub from retrying.
-    Processing errors are logged but do not surface as HTTP errors.
     """
     body = await request.json()
     try:
@@ -105,7 +101,7 @@ async def gmail_webhook(request: Request):
         return
 
     email_address = payload.get("emailAddress", "unknown")
-    history_id = payload.get("historyId", "")
+    history_id    = payload.get("historyId", "")
     logger.info(f"Pub/Sub notification: email={email_address}, historyId={history_id}")
 
     if not history_id:
@@ -149,6 +145,28 @@ async def gmail_webhook(request: Request):
             )
 
 
+# ── Telegram Callback Webhook ─────────────────────────────────────────────────
+
+@app.post("/webhook/telegram", status_code=status.HTTP_200_OK, tags=["webhook"])
+async def telegram_webhook(request: Request):
+    """
+    Receives Telegram callback queries (button taps on alert messages).
+    Verified via X-Telegram-Bot-Api-Secret-Token header.
+    """
+    if settings.telegram_webhook_secret:
+        token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if token != settings.telegram_webhook_secret:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+
+    update = await request.json()
+    callback_query = update.get("callback_query")
+
+    if callback_query:
+        await handle_callback(callback_query, db)
+
+    return {"ok": True}
+
+
 # ── Internal endpoints (Cloud Scheduler) ─────────────────────────────────────
 
 @app.post(
@@ -158,10 +176,7 @@ async def gmail_webhook(request: Request):
     dependencies=[Depends(verify_internal_secret)],
 )
 async def trigger_digest():
-    """
-    Send the daily email digest to Telegram.
-    Triggered by Cloud Scheduler at 07:30 and 17:30.
-    """
+    """Send the daily email digest. Triggered at 07:30 and 17:30."""
     count = await send_digest(db, telegram)
     return {"dispatched": count}
 
@@ -173,10 +188,7 @@ async def trigger_digest():
     dependencies=[Depends(verify_internal_secret)],
 )
 async def trigger_unsubscribe_reminder():
-    """
-    Send the weekly Aperture/Unsubscribe summary to Telegram.
-    Triggered by Cloud Scheduler every Sunday at 10:00.
-    """
+    """Send the weekly Aperture/Unsubscribe summary. Triggered Sundays 10:00."""
     gmail_service = build_gmail_service(db)
     count = await send_unsubscribe_reminder(db, gmail_service, telegram)
     return {"found": count}
@@ -189,12 +201,18 @@ async def trigger_unsubscribe_reminder():
     dependencies=[Depends(verify_internal_secret)],
 )
 async def trigger_renew_watch():
-    """
-    Renew the Gmail push notification watch (expires every 7 days).
-    Triggered by Cloud Scheduler every 5 days.
-    """
+    """Renew the Gmail push watch (expires every 7 days). Triggered every 5 days."""
     response = setup_watch(db)
-    return {
-        "history_id": response["historyId"],
-        "expiration": response["expiration"],
-    }
+    return {"history_id": response["historyId"], "expiration": response["expiration"]}
+
+
+@app.post(
+    "/internal/process-snoozes",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_process_snoozes():
+    """Re-fire alerts for expired snoozes. Triggered every 15 minutes."""
+    count = await process_snoozes(db, telegram)
+    return {"fired": count}

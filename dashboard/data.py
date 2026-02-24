@@ -105,6 +105,42 @@ def pause_subscription() -> None:
     get_control_state.clear()
 
 
+@st.cache_data(ttl=30)
+def get_corrections(_db) -> list[dict]:
+    """All corrections (confirmed and pending), newest first."""
+    docs = (
+        _db.collection("aperture_corrections")
+        .order_by("created_at", direction="DESCENDING")
+        .limit(100)
+        .stream()
+    )
+    rows = []
+    for doc in docs:
+        d = doc.to_dict()
+        d["_doc_id"] = doc.id
+        if d.get("created_at"):
+            d["created_at"] = d["created_at"].replace(tzinfo=timezone.utc)
+        rows.append(d)
+    return rows
+
+
+def confirm_correction(doc_id: str, db) -> None:
+    """Mark a correction as confirmed and invalidate the LLM cache."""
+    from triage.llm_client import invalidate_corrections_cache
+    db.collection("aperture_corrections").document(doc_id).update({
+        "confirmed": True,
+        "confirmed_at": datetime.now(timezone.utc),
+    })
+    invalidate_corrections_cache()
+    get_corrections.clear()
+
+
+def discard_correction(doc_id: str, db) -> None:
+    """Delete a correction."""
+    db.collection("aperture_corrections").document(doc_id).delete()
+    get_corrections.clear()
+
+
 def resume_subscription() -> None:
     from google.cloud import pubsub_v1
     from google.cloud.pubsub_v1.types import PushConfig
