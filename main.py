@@ -7,14 +7,17 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from google.cloud import firestore
 
 from actions.executor import execute
 from config import settings
 from gmail.client import build_gmail_service
 from gmail.pubsub_handler import process_notification
+from gmail.watch import setup_watch
 from notifications.telegram import TelegramNotifier
+from scheduler.digest import send_digest
+from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
 from triage.llm_client import get_triage_client
 
 logging.basicConfig(
@@ -42,7 +45,7 @@ async def lifespan(app: FastAPI):
     logger.info(
         f"Ready | project={settings.gcp_project_id} "
         f"| db={settings.firestore_database} "
-        f"| llm={settings.llm_provider}"
+        f"| llm={settings.llm_provider} ({settings.gemini_model})"
     )
     yield
     logger.info("Aperture shutting down.")
@@ -51,16 +54,36 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Aperture",
     description="Personal Gmail Triage Agent",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
+
+
+# ── Auth dependency for internal endpoints ────────────────────────────────────
+
+async def verify_internal_secret(x_aperture_secret: str = Header(...)):
+    """
+    Protects /internal/* endpoints.
+    Cloud Scheduler sends the secret via the X-Aperture-Secret header.
+    """
+    if not settings.internal_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="INTERNAL_SECRET is not configured.",
+        )
+    if x_aperture_secret != settings.internal_secret:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
 async def health_check():
-    return {"status": "ok", "project": settings.gcp_project_id}
+    return {
+        "status": "ok",
+        "project": settings.gcp_project_id,
+        "model": settings.gemini_model,
+    }
 
 
 # ── Gmail Pub/Sub Webhook ─────────────────────────────────────────────────────
@@ -73,13 +96,11 @@ async def gmail_webhook(request: Request):
     Always returns 204 to prevent Pub/Sub from retrying.
     Processing errors are logged but do not surface as HTTP errors.
     """
-    # ── Parse the Pub/Sub envelope ────────────────────────────────────────────
     body = await request.json()
     try:
         encoded = body["message"]["data"]
         payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
     except (KeyError, ValueError) as exc:
-        # Malformed message — ack it to prevent endless retries
         logger.error(f"Malformed Pub/Sub envelope: {exc} | raw={str(body)[:200]}")
         return
 
@@ -91,7 +112,6 @@ async def gmail_webhook(request: Request):
         logger.warning("Notification missing historyId — skipping.")
         return
 
-    # ── Process notification ──────────────────────────────────────────────────
     try:
         gmail_service = build_gmail_service(db)
         messages = process_notification(history_id, db, gmail_service)
@@ -104,7 +124,6 @@ async def gmail_webhook(request: Request):
 
     logger.info(f"Triaging {len(messages)} new message(s)…")
 
-    # ── Triage + execute each message ─────────────────────────────────────────
     for msg in messages:
         try:
             triage_result = triage_client.triage(
@@ -124,8 +143,58 @@ async def gmail_webhook(request: Request):
                 telegram=telegram,
             )
         except Exception as exc:
-            # Log and continue — don't let one bad message block the rest
             logger.exception(
                 f"Error processing message {msg.get('id')} "
                 f"('{msg.get('subject', '')[:60]}'): {exc}"
             )
+
+
+# ── Internal endpoints (Cloud Scheduler) ─────────────────────────────────────
+
+@app.post(
+    "/internal/digest",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_digest():
+    """
+    Send the daily email digest to Telegram.
+    Triggered by Cloud Scheduler at 07:30 and 17:30.
+    """
+    count = await send_digest(db, telegram)
+    return {"dispatched": count}
+
+
+@app.post(
+    "/internal/unsubscribe-reminder",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_unsubscribe_reminder():
+    """
+    Send the weekly Aperture/Unsubscribe summary to Telegram.
+    Triggered by Cloud Scheduler every Sunday at 10:00.
+    """
+    gmail_service = build_gmail_service(db)
+    count = await send_unsubscribe_reminder(db, gmail_service, telegram)
+    return {"found": count}
+
+
+@app.post(
+    "/internal/renew-watch",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_renew_watch():
+    """
+    Renew the Gmail push notification watch (expires every 7 days).
+    Triggered by Cloud Scheduler every 5 days.
+    """
+    response = setup_watch(db)
+    return {
+        "history_id": response["historyId"],
+        "expiration": response["expiration"],
+    }

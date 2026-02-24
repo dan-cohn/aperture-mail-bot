@@ -19,7 +19,14 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"          # "gemini" | "claude" | "openai"
     gemini_model: str = "gemini-2.5-flash"  # override via GEMINI_MODEL in .env
 
+    # Cloud Run (set after first deployment)
+    cloud_run_url: str = ""  # e.g. https://aperture-xxxx-uc.a.run.app
+
+    # Internal endpoint security
+    internal_secret: str = ""  # set via INTERNAL_SECRET in .env
+
     # App
+    timezone: str = "America/New_York"  # for digest schedule display
     log_level: str = "INFO"
     environment: str = "development"
 

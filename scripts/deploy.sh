@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Aperture — Cloud Run Deployment
+#
+# Run once (and on every code update):
+#   chmod +x scripts/deploy.sh
+#   ./scripts/deploy.sh
+#
+# Prerequisites:
+#   - gcloud CLI installed and authenticated
+#   - Docker running locally
+#   - .env file populated (used to push secrets to Secret Manager)
+# =============================================================================
+set -euo pipefail
+
+# ── Config ────────────────────────────────────────────────────────────────────
+PROJECT_ID="aperture-prod-20260221"
+REGION="us-central1"
+SERVICE_NAME="aperture"
+REPO_NAME="aperture-repo"
+IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME"
+
+echo "=== Aperture Deployment ==="
+echo "Project : $PROJECT_ID"
+echo "Region  : $REGION"
+echo "Image   : $IMAGE"
+echo ""
+
+# ── Step 1: Enable APIs ───────────────────────────────────────────────────────
+echo "--- Enabling required APIs..."
+gcloud services enable \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  --project="$PROJECT_ID"
+
+# ── Step 2: Create Artifact Registry repo (idempotent) ───────────────────────
+echo "--- Creating Artifact Registry repository (if not exists)..."
+gcloud artifacts repositories describe "$REPO_NAME" \
+  --location="$REGION" --project="$PROJECT_ID" &>/dev/null || \
+gcloud artifacts repositories create "$REPO_NAME" \
+  --repository-format=docker \
+  --location="$REGION" \
+  --project="$PROJECT_ID"
+
+# ── Step 3: Configure Docker auth ────────────────────────────────────────────
+echo "--- Configuring Docker authentication..."
+gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+# ── Step 4: Build and push image ─────────────────────────────────────────────
+echo "--- Building Docker image..."
+docker build --platform linux/amd64 -t "$IMAGE:latest" .
+
+echo "--- Pushing image to Artifact Registry..."
+docker push "$IMAGE:latest"
+
+# ── Step 5: Push secrets to Secret Manager ───────────────────────────────────
+echo "--- Syncing secrets to Secret Manager..."
+
+push_secret() {
+  local name="$1"
+  local value="$2"
+  if gcloud secrets describe "$name" --project="$PROJECT_ID" &>/dev/null; then
+    echo "$value" | gcloud secrets versions add "$name" \
+      --data-file=- --project="$PROJECT_ID"
+  else
+    echo "$value" | gcloud secrets create "$name" \
+      --data-file=- --project="$PROJECT_ID" --replication-policy=automatic
+  fi
+}
+
+# Load .env (skip comments and blank lines)
+if [ -f .env ]; then
+  while IFS='=' read -r key value; do
+    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+    # Strip inline comments
+    value="${value%%#*}"
+    value="${value%"${value##*[![:space:]]}"}"  # rtrim
+    case "$key" in
+      TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET)
+        push_secret "aperture-$key" "$value"
+        ;;
+    esac
+  done < .env
+else
+  echo "WARNING: .env not found — skipping secret sync"
+fi
+
+# ── Step 6: Grant Cloud Run SA access to secrets + Firestore ─────────────────
+echo "--- Granting service account permissions..."
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA" \
+  --role="roles/datastore.user" --quiet
+
+for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET; do
+  gcloud secrets add-iam-policy-binding "aperture-$secret" \
+    --member="serviceAccount:$SA" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="$PROJECT_ID" --quiet
+done
+
+# ── Step 7: Deploy to Cloud Run ───────────────────────────────────────────────
+echo "--- Deploying to Cloud Run..."
+gcloud run deploy "$SERVICE_NAME" \
+  --image="$IMAGE:latest" \
+  --platform=managed \
+  --region="$REGION" \
+  --project="$PROJECT_ID" \
+  --allow-unauthenticated \
+  --min-instances=0 \
+  --max-instances=2 \
+  --memory=512Mi \
+  --cpu=1 \
+  --timeout=120 \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/New_York,LOG_LEVEL=INFO,ENVIRONMENT=production" \
+  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest"
+
+# ── Step 8: Print the service URL ─────────────────────────────────────────────
+SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
+  --region="$REGION" --project="$PROJECT_ID" \
+  --format="value(status.url)")
+
+echo ""
+echo "=== Deployment Complete ==="
+echo "Service URL: $SERVICE_URL"
+echo ""
+echo "Next steps:"
+echo "  1. Run: ./scripts/setup_scheduler.sh $SERVICE_URL"
+echo "  2. Set up the Pub/Sub push subscription:"
+echo "     gcloud pubsub subscriptions create aperture-gmail-push-sub \\"
+echo "       --topic=aperture-gmail-push \\"
+echo "       --push-endpoint=$SERVICE_URL/webhook/gmail \\"
+echo "       --ack-deadline=60 \\"
+echo "       --project=$PROJECT_ID"
+echo ""
+echo "  3. Renew the Gmail watch to point at the live service:"
+echo "     source .venv/bin/activate && python scripts/setup_watch.py"
