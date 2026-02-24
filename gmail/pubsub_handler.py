@@ -54,7 +54,7 @@ def process_notification(
         _update_history_id(db, notification_history_id)
         return []
 
-    if notification_history_id <= stored_id:
+    if int(notification_history_id) <= int(stored_id):
         logger.info(
             f"Duplicate/stale notification (notif={notification_history_id}, "
             f"stored={stored_id}). Skipping."

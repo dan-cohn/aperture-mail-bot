@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from google.cloud import firestore
+from google.cloud.firestore_v1 import FieldFilter
 
 from notifications.telegram import TelegramNotifier
 from triage.schemas import TriageResult
@@ -19,7 +20,7 @@ async def process_snoozes(db: firestore.Client, telegram: TelegramNotifier) -> i
     Returns the number of alerts re-fired.
     """
     now = datetime.now(timezone.utc)
-    docs = list(db.collection("aperture_snoozes").where("sent", "==", False).stream())
+    docs = list(db.collection("aperture_snoozes").where(filter=FieldFilter("sent", "==", False)).stream())
 
     if not docs:
         return 0

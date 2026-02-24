@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from google.cloud import firestore
+from google.cloud.firestore_v1 import FieldFilter
 
 from config import settings
 from triage.schemas import CATEGORY_NAMES
@@ -225,7 +226,7 @@ def _fetch_log_entry(db: firestore.Client, gmail_id: str) -> dict:
     try:
         docs = (
             db.collection("aperture_triage_log")
-            .where("message_id", "==", gmail_id)
+            .where(filter=FieldFilter("message_id", "==", gmail_id))
             .limit(1)
             .stream()
         )

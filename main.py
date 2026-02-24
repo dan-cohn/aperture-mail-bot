@@ -69,7 +69,7 @@ async def verify_internal_secret(x_aperture_secret: str = Header(...)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="INTERNAL_SECRET is not configured.",
         )
-    if x_aperture_secret != settings.internal_secret:
+    if x_aperture_secret.strip() != settings.internal_secret.strip():
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
 
@@ -101,7 +101,7 @@ async def gmail_webhook(request: Request):
         return
 
     email_address = payload.get("emailAddress", "unknown")
-    history_id    = payload.get("historyId", "")
+    history_id    = str(payload.get("historyId", ""))
     logger.info(f"Pub/Sub notification: email={email_address}, historyId={history_id}")
 
     if not history_id:

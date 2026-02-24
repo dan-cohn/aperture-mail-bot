@@ -1,7 +1,7 @@
 """
 Pluggable LLM client for email triage.
 
-Default: Gemini 2.5 Flash via google-generativeai (model configurable via GEMINI_MODEL in .env).
+Default: Gemini 2.5 Flash via google-genai (model configurable via GEMINI_MODEL in .env).
 Adding a new provider: subclass BaseTriage and register it in get_triage_client().
 
 Dynamic corrections:
@@ -14,7 +14,9 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
-import google.generativeai as genai
+from google import genai
+from google.cloud.firestore_v1 import FieldFilter
+from google.genai import types
 from pydantic import ValidationError
 
 from config import settings
@@ -55,7 +57,7 @@ def _load_corrections(db) -> str:
     try:
         docs = (
             db.collection("aperture_corrections")
-            .where("confirmed", "==", True)
+            .where(filter=FieldFilter("confirmed", "==", True))
             .limit(20)
             .stream()
         )
@@ -106,30 +108,31 @@ class BaseTriage(ABC):
 class GeminiTriageClient(BaseTriage):
     def __init__(self, db=None):
         self._db = db
-        genai.configure(api_key=settings.gemini_api_key)
-        self._generation_config = genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.1,
-        )
+        self._client = genai.Client(api_key=settings.gemini_api_key)
 
-    def _get_model(self):
+    def _get_config(self) -> types.GenerateContentConfig:
         """
-        Build a GenerativeModel whose system instruction includes any confirmed
+        Build a GenerateContentConfig whose system instruction includes any confirmed
         corrections fetched from Firestore. Rebuilt each call so corrections
         take effect within the cache TTL (5 min) without a redeploy.
         """
         corrections = _load_corrections(self._db)
         system = SYSTEM_PROMPT + corrections if corrections else SYSTEM_PROMPT
-        return genai.GenerativeModel(
-            model_name=settings.gemini_model,
+        return types.GenerateContentConfig(
             system_instruction=system,
-            generation_config=self._generation_config,
+            response_mime_type="application/json",
+            temperature=0.1,
         )
 
     def triage(self, sender: str, subject: str, snippet: str, date: str = "") -> TriageResult:
         user_msg = build_user_message(sender, subject, snippet, date)
+        response = None
         try:
-            response = self._get_model().generate_content(user_msg)
+            response = self._client.models.generate_content(
+                model=settings.gemini_model,
+                contents=user_msg,
+                config=self._get_config(),
+            )
             data = json.loads(response.text)
             result = TriageResult(**data)
             logger.info(

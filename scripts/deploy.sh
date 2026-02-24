@@ -60,10 +60,10 @@ push_secret() {
   local name="$1"
   local value="$2"
   if gcloud secrets describe "$name" --project="$PROJECT_ID" &>/dev/null; then
-    echo "$value" | gcloud secrets versions add "$name" \
+    printf '%s' "$value" | gcloud secrets versions add "$name" \
       --data-file=- --project="$PROJECT_ID"
   else
-    echo "$value" | gcloud secrets create "$name" \
+    printf '%s' "$value" | gcloud secrets create "$name" \
       --data-file=- --project="$PROJECT_ID" --replication-policy=automatic
   fi
 }
@@ -114,7 +114,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory=512Mi \
   --cpu=1 \
   --timeout=120 \
-  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/New_York,LOG_LEVEL=INFO,ENVIRONMENT=production" \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production" \
   --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest"
 
 # ── Step 8: Print the service URL ─────────────────────────────────────────────
