@@ -123,7 +123,7 @@ with st.sidebar:
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 
-st.header("Aperture Dashboard")
+st.header("Aperture Email Dashboard")
 
 log = get_triage_log(db)
 queue = get_summary_queue(db)
@@ -153,8 +153,8 @@ with tab1:
 
         # Top metrics
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Today",      len(today_df))
-        c2.metric("This Week",  len(week_df))
+        c1.metric("Today",        len(today_df))
+        c2.metric("This Week",    len(week_df))
         c3.metric("Total Logged", len(df))
         c4.metric("Digest Queue", len(queue))
 
@@ -387,9 +387,9 @@ with tab5:
             rows = []
             for c in confirmed:
                 rows.append({
-                    "From":       c.get("sender", "")[:50],
-                    "Subject":    c.get("subject", "")[:60],
-                    "Was":        f"[{c['wrong_category']}] {c['wrong_category_name']}",
-                    "Correct":    f"[{c['correct_category']}] {c['correct_category_name']}",
+                    "From":    c.get("sender", "")[:50],
+                    "Subject": c.get("subject", "")[:60],
+                    "Was":     f"[{c['wrong_category']}] {c['wrong_category_name']}",
+                    "Correct": f"[{c['correct_category']}] {c['correct_category_name']}",
                 })
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
