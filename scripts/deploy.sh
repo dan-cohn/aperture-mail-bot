@@ -76,7 +76,7 @@ if [ -f .env ]; then
     value="${value%%#*}"
     value="${value%"${value##*[![:space:]]}"}"  # rtrim
     case "$key" in
-      TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET)
+      TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET)
         push_secret "aperture-$key" "$value"
         ;;
     esac
@@ -94,7 +94,7 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:$SA" \
   --role="roles/datastore.user" --quiet
 
-for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET; do
+for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET; do
   gcloud secrets add-iam-policy-binding "aperture-$secret" \
     --member="serviceAccount:$SA" \
     --role="roles/secretmanager.secretAccessor" \
@@ -115,7 +115,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --cpu=1 \
   --timeout=120 \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production" \
-  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest"
+  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=aperture-TELEGRAM_WEBHOOK_SECRET:latest"
 
 # ── Step 8: Print the service URL ─────────────────────────────────────────────
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
