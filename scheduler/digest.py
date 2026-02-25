@@ -6,12 +6,14 @@ groups them by category, and sends a single Telegram message.
 Runs at 07:30 and 17:30 (triggered via POST /internal/digest).
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from google.cloud import firestore
 
 from notifications.telegram import TelegramNotifier
 from triage.schemas import CATEGORY_NAMES
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +56,11 @@ async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
         by_category.setdefault(cat, []).append(item)
 
     # Build Telegram message
-    now = datetime.now(timezone.utc)
-    time_str = now.strftime("%H:%M UTC")
+    now = datetime.now(ZoneInfo(settings.timezone))
+    time_str = now.strftime("%H:%M %Z")
     total = len(pending)
 
-    lines = [f"📋 <b>Aperture Digest — {time_str}</b>\n"]
+    lines = [f"📋 <b>Email Digest — {time_str}</b>\n"]
 
     for cat in sorted(by_category.keys()):
         items = by_category[cat]
