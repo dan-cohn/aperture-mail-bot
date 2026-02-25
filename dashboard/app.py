@@ -93,19 +93,19 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("⏸ Pause", use_container_width=True, disabled=(sub_state == "PAUSED")):
+        if st.button("⏸ Pause", width="stretch", disabled=(sub_state == "PAUSED")):
             with st.spinner("Pausing…"):
                 pause_subscription()
             st.success("Paused.")
             st.rerun()
     with col2:
-        if st.button("▶ Resume", use_container_width=True, disabled=(sub_state == "RUNNING")):
+        if st.button("▶ Resume", width="stretch", disabled=(sub_state == "RUNNING")):
             with st.spinner("Resuming…"):
                 resume_subscription()
             st.success("Resumed.")
             st.rerun()
 
-    if st.button("📬 Send Digest Now", use_container_width=True):
+    if st.button("📬 Send Digest Now", width="stretch"):
         from notifications.telegram import TelegramNotifier
         from scheduler.digest import send_digest
         with st.spinner("Sending digest…"):
@@ -116,7 +116,7 @@ with st.sidebar:
             st.info("Queue is empty.")
 
     st.divider()
-    if st.button("🔄 Refresh", use_container_width=True):
+    if st.button("🔄 Refresh", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
@@ -246,7 +246,7 @@ with tab2:
                 column_config={
                     "summary": st.column_config.TextColumn("Summary", width="large"),
                 },
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -310,7 +310,7 @@ with tab3:
                 column_config={
                     "reasoning": st.column_config.TextColumn("Reasoning", width="large"),
                 },
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -336,7 +336,7 @@ with tab4:
             column_config={
                 "summary": st.column_config.TextColumn("Summary", width="large"),
             },
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -369,11 +369,11 @@ with tab5:
                             st.caption(f"_{c['snippet'][:120]}_")
                     with col2:
                         doc_id = c["_doc_id"]
-                        if st.button("✅ Confirm", key=f"confirm_{doc_id}", use_container_width=True):
+                        if st.button("✅ Confirm", key=f"confirm_{doc_id}", width="stretch"):
                             confirm_correction(doc_id, db)
                             st.success("Confirmed — live in next triage call.")
                             st.rerun()
-                        if st.button("🗑 Discard", key=f"discard_{doc_id}", use_container_width=True):
+                        if st.button("🗑 Discard", key=f"discard_{doc_id}", width="stretch"):
                             discard_correction(doc_id, db)
                             st.rerun()
         else:
@@ -392,4 +392,4 @@ with tab5:
                     "Was":        f"[{c['wrong_category']}] {c['wrong_category_name']}",
                     "Correct":    f"[{c['correct_category']}] {c['correct_category_name']}",
                 })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
