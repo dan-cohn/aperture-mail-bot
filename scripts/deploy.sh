@@ -20,86 +20,99 @@ SERVICE_NAME="aperture"
 REPO_NAME="aperture-repo"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME"
 
-echo "=== Aperture Deployment ==="
+# --quick skips one-time setup (API enables, IAM grants, secret sync)
+QUICK=false
+if [[ "${1:-}" == "--quick" ]]; then
+  QUICK=true
+fi
+
+echo "=== Aperture Deployment${QUICK:+ (quick mode)} ==="
 echo "Project : $PROJECT_ID"
 echo "Region  : $REGION"
 echo "Image   : $IMAGE"
 echo ""
 
-# ── Step 1: Enable APIs ───────────────────────────────────────────────────────
-echo "--- Enabling required APIs..."
-gcloud services enable \
-  artifactregistry.googleapis.com \
-  secretmanager.googleapis.com \
-  --project="$PROJECT_ID"
+if [ "$QUICK" = false ]; then
+  # ── Step 1: Enable APIs ─────────────────────────────────────────────────────
+  echo "--- Enabling required APIs..."
+  gcloud services enable \
+    artifactregistry.googleapis.com \
+    secretmanager.googleapis.com \
+    --project="$PROJECT_ID"
 
-# ── Step 2: Create Artifact Registry repo (idempotent) ───────────────────────
-echo "--- Creating Artifact Registry repository (if not exists)..."
-gcloud artifacts repositories describe "$REPO_NAME" \
-  --location="$REGION" --project="$PROJECT_ID" &>/dev/null || \
-gcloud artifacts repositories create "$REPO_NAME" \
-  --repository-format=docker \
-  --location="$REGION" \
-  --project="$PROJECT_ID"
+  # ── Step 2: Create Artifact Registry repo (idempotent) ───────────────────────
+  echo "--- Creating Artifact Registry repository (if not exists)..."
+  gcloud artifacts repositories describe "$REPO_NAME" \
+    --location="$REGION" --project="$PROJECT_ID" &>/dev/null || \
+  gcloud artifacts repositories create "$REPO_NAME" \
+    --repository-format=docker \
+    --location="$REGION" \
+    --project="$PROJECT_ID"
+fi
 
 # ── Step 3: Configure Docker auth ────────────────────────────────────────────
 echo "--- Configuring Docker authentication..."
 gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
-# ── Step 4: Build and push image ─────────────────────────────────────────────
+# ── Step 4: Build and push image (with registry cache) ───────────────────────
 echo "--- Building Docker image..."
-docker build --platform linux/amd64 -t "$IMAGE:latest" .
+docker buildx build \
+  --platform linux/amd64 \
+  --cache-from "type=registry,ref=$IMAGE:latest" \
+  --cache-to "type=inline" \
+  -t "$IMAGE:latest" \
+  --push \
+  .
 
-echo "--- Pushing image to Artifact Registry..."
-docker push "$IMAGE:latest"
+if [ "$QUICK" = false ]; then
+  # ── Step 5: Push secrets to Secret Manager ───────────────────────────────────
+  echo "--- Syncing secrets to Secret Manager..."
 
-# ── Step 5: Push secrets to Secret Manager ───────────────────────────────────
-echo "--- Syncing secrets to Secret Manager..."
+  push_secret() {
+    local name="$1"
+    local value="$2"
+    if gcloud secrets describe "$name" --project="$PROJECT_ID" &>/dev/null; then
+      printf '%s' "$value" | gcloud secrets versions add "$name" \
+        --data-file=- --project="$PROJECT_ID"
+    else
+      printf '%s' "$value" | gcloud secrets create "$name" \
+        --data-file=- --project="$PROJECT_ID" --replication-policy=automatic
+    fi
+  }
 
-push_secret() {
-  local name="$1"
-  local value="$2"
-  if gcloud secrets describe "$name" --project="$PROJECT_ID" &>/dev/null; then
-    printf '%s' "$value" | gcloud secrets versions add "$name" \
-      --data-file=- --project="$PROJECT_ID"
+  # Load .env (skip comments and blank lines)
+  if [ -f .env ]; then
+    while IFS='=' read -r key value; do
+      [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+      # Strip inline comments
+      value="${value%%#*}"
+      value="${value%"${value##*[![:space:]]}"}"  # rtrim
+      case "$key" in
+        TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET)
+          push_secret "aperture-$key" "$value"
+          ;;
+      esac
+    done < .env
   else
-    printf '%s' "$value" | gcloud secrets create "$name" \
-      --data-file=- --project="$PROJECT_ID" --replication-policy=automatic
+    echo "WARNING: .env not found — skipping secret sync"
   fi
-}
 
-# Load .env (skip comments and blank lines)
-if [ -f .env ]; then
-  while IFS='=' read -r key value; do
-    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
-    # Strip inline comments
-    value="${value%%#*}"
-    value="${value%"${value##*[![:space:]]}"}"  # rtrim
-    case "$key" in
-      TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET)
-        push_secret "aperture-$key" "$value"
-        ;;
-    esac
-  done < .env
-else
-  echo "WARNING: .env not found — skipping secret sync"
-fi
+  # ── Step 6: Grant Cloud Run SA access to secrets + Firestore ─────────────────
+  echo "--- Granting service account permissions..."
+  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+  SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
 
-# ── Step 6: Grant Cloud Run SA access to secrets + Firestore ─────────────────
-echo "--- Granting service account permissions..."
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
-SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
-
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:$SA" \
-  --role="roles/datastore.user" --quiet
-
-for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET; do
-  gcloud secrets add-iam-policy-binding "aperture-$secret" \
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SA" \
-    --role="roles/secretmanager.secretAccessor" \
-    --project="$PROJECT_ID" --quiet
-done
+    --role="roles/datastore.user" --quiet
+
+  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET; do
+    gcloud secrets add-iam-policy-binding "aperture-$secret" \
+      --member="serviceAccount:$SA" \
+      --role="roles/secretmanager.secretAccessor" \
+      --project="$PROJECT_ID" --quiet
+  done
+fi
 
 # ── Step 7: Deploy to Cloud Run ───────────────────────────────────────────────
 echo "--- Deploying to Cloud Run..."
@@ -121,6 +134,33 @@ gcloud run deploy "$SERVICE_NAME" \
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
   --region="$REGION" --project="$PROJECT_ID" \
   --format="value(status.url)")
+
+# ── Step 9: Register Telegram webhook ────────────────────────────────────────
+echo "--- Registering Telegram webhook..."
+BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)
+WEBHOOK_SECRET=$(grep '^TELEGRAM_WEBHOOK_SECRET=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)
+
+if [ -n "$BOT_TOKEN" ]; then
+  WEBHOOK_URL="$SERVICE_URL/webhook/telegram"
+  PAYLOAD="{\"url\": \"$WEBHOOK_URL\", \"allowed_updates\": [\"callback_query\"]"
+  if [ -n "$WEBHOOK_SECRET" ]; then
+    PAYLOAD="$PAYLOAD, \"secret_token\": \"$WEBHOOK_SECRET\""
+  fi
+  PAYLOAD="$PAYLOAD}"
+
+  RESPONSE=$(curl -s -X POST \
+    "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD")
+
+  if echo "$RESPONSE" | grep -q '"ok":true'; then
+    echo "Telegram webhook registered: $WEBHOOK_URL"
+  else
+    echo "WARNING: Telegram webhook registration failed: $RESPONSE"
+  fi
+else
+  echo "WARNING: TELEGRAM_BOT_TOKEN not found in .env — skipping webhook registration"
+fi
 
 echo ""
 echo "=== Deployment Complete ==="
