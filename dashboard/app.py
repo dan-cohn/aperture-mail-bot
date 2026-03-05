@@ -21,6 +21,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dashboard.data import (
+    LOCAL_TZ,
     confirm_correction,
     discard_correction,
     get_control_state,
@@ -77,7 +78,7 @@ with st.sidebar:
     watch = get_watch_state(db)
     if watch.get("expiration_iso"):
         expiry = datetime.fromisoformat(watch["expiration_iso"])
-        now = datetime.now(timezone.utc)
+        now = datetime.now(LOCAL_TZ)
         days_left = (expiry - now).days
         if days_left <= 1:
             st.error(f"Watch expires in {days_left}d", icon="⚠️")
@@ -146,7 +147,7 @@ with tab1:
         st.info("No triage data yet. Emails will appear here as they are processed.")
     else:
         df = pd.DataFrame(log)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(LOCAL_TZ)
 
         today_df    = df[df["processed_at"] >= now.replace(hour=0, minute=0, second=0)]
         week_df     = df[df["processed_at"] >= now - timedelta(days=7)]
@@ -216,12 +217,12 @@ with tab2:
                 index=1,
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(LOCAL_TZ)
         cutoffs = {
             "Last 24h": now - timedelta(hours=24),
             "Last 7d":  now - timedelta(days=7),
             "Last 30d": now - timedelta(days=30),
-            "All":      datetime.min.replace(tzinfo=timezone.utc),
+            "All":      datetime.min.replace(tzinfo=LOCAL_TZ),
         }
         filtered = df[
             (df["action"].isin(action_filter)) &
@@ -280,12 +281,12 @@ with tab3:
                 index=1,
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(LOCAL_TZ)
         cutoffs = {
             "Last 24h": now - timedelta(hours=24),
             "Last 7d":  now - timedelta(days=7),
             "Last 30d": now - timedelta(days=30),
-            "All":      datetime.min.replace(tzinfo=timezone.utc),
+            "All":      datetime.min.replace(tzinfo=LOCAL_TZ),
         }
         filtered = silent[
             (silent["action"].isin(action_filter)) &

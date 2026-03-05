@@ -9,10 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import settings
+
+LOCAL_TZ = ZoneInfo(settings.timezone)
 
 
 @st.cache_resource
@@ -39,7 +42,7 @@ def get_triage_log(_db, limit: int = 300) -> list[dict]:
         d = doc.to_dict()
         # Convert Firestore timestamp → Python datetime
         if d.get("processed_at"):
-            d["processed_at"] = d["processed_at"].replace(tzinfo=timezone.utc)
+            d["processed_at"] = d["processed_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
         rows.append(d)
     return rows
 
@@ -55,7 +58,7 @@ def get_summary_queue(_db) -> list[dict]:
         if d.get("dispatched", False):
             continue
         if d.get("enqueued_at"):
-            d["enqueued_at"] = d["enqueued_at"].replace(tzinfo=timezone.utc)
+            d["enqueued_at"] = d["enqueued_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
         rows.append(d)
     return rows
 
@@ -119,7 +122,7 @@ def get_corrections(_db) -> list[dict]:
         d = doc.to_dict()
         d["_doc_id"] = doc.id
         if d.get("created_at"):
-            d["created_at"] = d["created_at"].replace(tzinfo=timezone.utc)
+            d["created_at"] = d["created_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
         rows.append(d)
     return rows
 
