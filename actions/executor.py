@@ -1,12 +1,12 @@
 """
 Action executor — maps a TriageResult to a concrete Gmail + Telegram operation.
 
-Action A  (cat 1–2)   ALERT       : Mark read + Telegram immediate alert
-Action B  (cat 3–5)   SUMMARY     : Leave unread + enqueue for daily digest
-Action C  (cat 6–9)   INBOX       : No-op (stays unread in inbox)
-Action D  (cat 10)    ARCHIVE     : Mark read + remove from inbox
+Action A  (cat 1–2)   ALERT       : Star + label + leave unread + Telegram immediate alert
+Action B  (cat 3–5)   SUMMARY     : Label + leave unread + enqueue for daily digest
+Action C  (cat 6–9)   INBOX       : Label + leave unread in inbox
+Action D  (cat 10)    ARCHIVE     : Label + mark read + remove from inbox
 Action E  (cat 11)    UNSUBSCRIBE : Label 'Aperture/Unsubscribe' + archive
-Action F  (cat 12)    TRASH       : Mark read + move to trash
+Action F  (cat 12)    TRASH       : Move to trash (no label)
 """
 import logging
 
@@ -17,6 +17,22 @@ from notifications.telegram import TelegramNotifier
 from triage.schemas import TriageResult
 
 logger = logging.getLogger(__name__)
+
+# Category → Gmail label name applied at execution time
+CATEGORY_LABELS = {
+    1:  "Aperture/Urgent",
+    2:  "Aperture/Personal",
+    3:  "Aperture/Group",
+    4:  "Aperture/Events/Near-term",
+    5:  "Aperture/News",
+    6:  "Aperture/Deals",
+    7:  "Aperture/Events/Short-term",
+    8:  "Aperture/Planning",
+    9:  "Aperture/Reading",
+    10: "Aperture/Lists",
+    11: "Aperture/Unsubscribe",
+    # 12: Pure Trash — no label (goes straight to trash)
+}
 
 # In-process label ID cache to avoid repeated API calls across messages
 _label_cache: dict[str, str] = {}
@@ -38,30 +54,41 @@ async def execute(
         f"message={message_id} | subject='{subject[:60]}'"
     )
 
+    # Resolve label for this category (None for cat 12)
+    label_name = CATEGORY_LABELS.get(triage.category)
+    label_id = _get_label(gmail_service, label_name) if label_name else None
+
     if action == "ALERT":
-        # Action A: mark as read, fire Telegram alert immediately
-        modify_message(gmail_service, message_id, add_labels=[], remove_labels=["UNREAD"])
+        # Action A: star + label + leave unread + fire Telegram alert
+        add = ["STARRED"]
+        if label_id:
+            add.append(label_id)
+        modify_message(gmail_service, message_id, add_labels=add, remove_labels=[])
         await telegram.send_alert(triage, sender, subject, message_id)
 
     elif action == "SUMMARY":
-        # Action B: leave unread, enqueue for the 07:30 / 17:30 digest
+        # Action B: label + leave unread + enqueue for the 07:30 / 17:30 digest
+        if label_id:
+            modify_message(gmail_service, message_id, add_labels=[label_id], remove_labels=[])
         _enqueue_summary(db, triage, message_id, thread_id, sender, subject)
 
     elif action == "INBOX":
-        # Action C: do nothing — stays unread in inbox
-        pass
+        # Action C: label + leave unread in inbox
+        if label_id:
+            modify_message(gmail_service, message_id, add_labels=[label_id], remove_labels=[])
 
     elif action == "ARCHIVE":
-        # Action D: mark as read + remove from inbox (archive)
-        modify_message(gmail_service, message_id, add_labels=[], remove_labels=["UNREAD", "INBOX"])
+        # Action D: label + mark read + remove from inbox
+        add = [label_id] if label_id else []
+        modify_message(gmail_service, message_id, add_labels=add, remove_labels=["UNREAD", "INBOX"])
 
     elif action == "UNSUBSCRIBE":
-        # Action E: apply label + archive
-        label_id = _get_label(gmail_service, "Aperture/Unsubscribe")
-        modify_message(gmail_service, message_id, add_labels=[label_id], remove_labels=["INBOX"])
+        # Action E: label + archive
+        add = [label_id] if label_id else []
+        modify_message(gmail_service, message_id, add_labels=add, remove_labels=["INBOX"])
 
     elif action == "TRASH":
-        # Action F: mark as read + trash
+        # Action F: trash (no label)
         trash_message(gmail_service, message_id)
 
     else:
