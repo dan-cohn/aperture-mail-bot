@@ -1,3 +1,6 @@
+# Prompt — contains personal info, managed via Firestore
+.prompt
+
 # Secrets — never commit these
 .env
 credentials.json

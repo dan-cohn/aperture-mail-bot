@@ -27,6 +27,8 @@ from dashboard.data import (
     get_control_state,
     get_corrections,
     get_db,
+    get_prompt_history,
+    get_prompts,
     get_subscription_state,
     get_summary_queue,
     get_triage_log,
@@ -132,12 +134,13 @@ queue = get_summary_queue(db)
 corrections = get_corrections(db)
 pending_corrections = [c for c in corrections if not c.get("confirmed")]
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Overview",
     "📜 Recent Activity",
     "🔕 Silent Actions",
     "📋 Digest Queue",
     f"✏️ Corrections {'🔴' if pending_corrections else ''}",
+    "📝 Prompts",
 ])
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -344,7 +347,7 @@ with tab4:
 
 # ── Tab 5: Corrections ────────────────────────────────────────────────────────
 
-with tab5:
+with tab6:
     st.caption(
         "Corrections submitted via the ❌ Wrong Category button in Telegram. "
         "**Confirm** to inject into the live triage prompt. **Discard** to remove."
@@ -394,3 +397,57 @@ with tab5:
                     "Correct": f"[{c['correct_category']}] {c['correct_category_name']}",
                 })
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
+# ── Tab 6: Prompts ────────────────────────────────────────────────────────────
+
+with tab6:
+    st.caption(
+        "Live prompts loaded from Firestore. "
+        "Update core via `scripts/sync_prompt.py`, learned via `--learned FILE`."
+    )
+    prompts = get_prompts(db)
+
+    # Core prompt
+    core = prompts.get("core", {})
+    core_content = core.get("content", "")
+    core_synced = core.get("synced_at")
+    core_meta = f"Synced: {core_synced.strftime('%Y-%m-%d %H:%M %Z') if core_synced else 'unknown'}  |  {len(core_content):,} chars"
+    with st.expander(f"**Core prompt** — {core_meta}", expanded=False):
+        if core_content:
+            st.text(core_content)
+        else:
+            st.warning("Core prompt not found in Firestore. Run `scripts/sync_prompt.py`.")
+
+    st.divider()
+
+    # Learned prompt
+    learned = prompts.get("learned", {})
+    learned_content = learned.get("content", "")
+    learned_version = learned.get("version", "—")
+    learned_updated = learned.get("updated_at")
+    learned_meta = (
+        f"v{learned_version}  |  "
+        f"Updated: {learned_updated.strftime('%Y-%m-%d %H:%M %Z') if learned_updated else 'unknown'}  |  "
+        f"{len(learned_content):,} chars"
+    )
+    with st.expander(f"**Learned prompt** — {learned_meta}", expanded=True):
+        if learned_content:
+            st.text(learned_content)
+        else:
+            st.info("Learned prompt is empty. Add freeform rules via `scripts/sync_prompt.py --learned FILE`.")
+
+    # Version history
+    history = get_prompt_history(db)
+    if history:
+        st.divider()
+        st.subheader(f"Learned Prompt History ({len(history)} versions)")
+        for h in history:
+            archived = h.get("archived_at")
+            label = (
+                f"v{h.get('version')}  —  "
+                f"archived {archived.strftime('%Y-%m-%d %H:%M %Z') if archived else 'unknown'}  |  "
+                f"{len(h.get('content', '')):,} chars"
+            )
+            with st.expander(label, expanded=False):
+                st.text(h.get("content", "(empty)"))

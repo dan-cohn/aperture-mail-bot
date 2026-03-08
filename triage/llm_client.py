@@ -4,15 +4,20 @@ Pluggable LLM client for email triage.
 Default: Gemini 2.5 Flash via google-genai (model configurable via GEMINI_MODEL in .env).
 Adding a new provider: subclass BaseTriage and register it in get_triage_client().
 
-Dynamic corrections:
-  When a Firestore client is passed to GeminiTriageClient, confirmed user corrections
-  are fetched (cached for 5 min) and appended to the system prompt as high-priority
-  few-shot examples. This means feedback takes effect immediately — no redeploy needed.
+System prompt assembly (in order):
+  1. core prompt    — loaded from Firestore (aperture_config/prompt_core),
+                      synced from the git-ignored .prompt file on each deploy
+  2. learned prompt — freeform rules in Firestore (aperture_config/prompt_learned),
+                      editable without a redeploy via scripts/sync_prompt.py
+  3. corrections    — per-email feedback confirmed by the user via Telegram
+
+All three are cached in-process for 5 minutes and reloaded without a redeploy.
 """
 import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 from google import genai
 from google.cloud.firestore_v1 import FieldFilter
@@ -20,12 +25,11 @@ from google.genai import types
 from pydantic import ValidationError
 
 from config import settings
-from triage.prompt import SYSTEM_PROMPT, build_user_message
+from triage.prompt import build_user_message
 from triage.schemas import CATEGORY_NAMES, TriageResult
 
 logger = logging.getLogger(__name__)
 
-# Safe fallback when the LLM returns unparseable output.
 _FALLBACK = TriageResult(
     category=9,
     is_urgent=False,
@@ -34,16 +38,68 @@ _FALLBACK = TriageResult(
     suggested_action="INBOX",
 )
 
-# In-process corrections cache: (formatted_string, timestamp)
+_CACHE_TTL = 300.0  # 5 minutes for all caches
+
+# (core, learned, timestamp)
+_prompt_cache: tuple[str, str, float] | None = None
+
+# (formatted_corrections, timestamp)
 _corrections_cache: tuple[str, float] | None = None
-_CORRECTIONS_TTL = 300.0  # 5 minutes
+
+
+def _load_prompts(db) -> tuple[str, str]:
+    """
+    Load core and learned prompts from Firestore, cached for 5 minutes.
+    Falls back to the local .prompt file if Firestore is unavailable.
+    """
+    global _prompt_cache
+
+    now = time.monotonic()
+    if _prompt_cache and (now - _prompt_cache[2]) < _CACHE_TTL:
+        return _prompt_cache[0], _prompt_cache[1]
+
+    def _fallback_core() -> str:
+        p = Path(__file__).resolve().parent.parent / ".prompt"
+        if p.exists():
+            logger.warning("Core prompt not in Firestore — fell back to .prompt file.")
+            return p.read_text().strip()
+        return ""
+
+    if db is None:
+        core = _fallback_core()
+        _prompt_cache = (core, "", now)
+        return core, ""
+
+    try:
+        doc = db.collection("aperture_config").document("prompt_core").get()
+        core = doc.to_dict().get("content", "") if doc.exists else ""
+        if not core:
+            core = _fallback_core()
+    except Exception as exc:
+        logger.warning(f"Failed to load core prompt: {exc}")
+        core = _fallback_core()
+
+    try:
+        doc = db.collection("aperture_config").document("prompt_learned").get()
+        learned = doc.to_dict().get("content", "") if doc.exists else ""
+    except Exception as exc:
+        logger.warning(f"Failed to load learned prompt: {exc}")
+        learned = ""
+
+    _prompt_cache = (core, learned, now)
+    logger.debug(f"Prompts loaded: core={len(core)} chars, learned={len(learned)} chars.")
+    return core, learned
+
+
+def invalidate_prompt_cache() -> None:
+    global _prompt_cache
+    _prompt_cache = None
 
 
 def _load_corrections(db) -> str:
     """
     Fetch confirmed corrections from Firestore, format as few-shot examples,
-    and cache the result for 5 minutes.
-    Returns an empty string if there are no corrections or db is None.
+    and cache for 5 minutes. Returns empty string if no corrections or db is None.
     """
     global _corrections_cache
 
@@ -51,7 +107,7 @@ def _load_corrections(db) -> str:
         return ""
 
     now = time.monotonic()
-    if _corrections_cache and (now - _corrections_cache[1]) < _CORRECTIONS_TTL:
+    if _corrections_cache and (now - _corrections_cache[1]) < _CACHE_TTL:
         return _corrections_cache[0]
 
     try:
@@ -94,7 +150,6 @@ def _load_corrections(db) -> str:
 
 
 def invalidate_corrections_cache() -> None:
-    """Call this after a correction is confirmed to force an immediate reload."""
     global _corrections_cache
     _corrections_cache = None
 
@@ -111,13 +166,10 @@ class GeminiTriageClient(BaseTriage):
         self._client = genai.Client(api_key=settings.gemini_api_key)
 
     def _get_config(self) -> types.GenerateContentConfig:
-        """
-        Build a GenerateContentConfig whose system instruction includes any confirmed
-        corrections fetched from Firestore. Rebuilt each call so corrections
-        take effect within the cache TTL (5 min) without a redeploy.
-        """
+        core, learned = _load_prompts(self._db)
         corrections = _load_corrections(self._db)
-        system = SYSTEM_PROMPT + corrections if corrections else SYSTEM_PROMPT
+        parts = [p for p in [core, learned, corrections] if p]
+        system = "\n\n".join(parts)
         return types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",

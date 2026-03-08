@@ -114,6 +114,10 @@ if [ "$QUICK" = false ]; then
   done
 fi
 
+# ── Step 6b: Sync prompts to Firestore (always runs) ─────────────────────────
+echo "--- Syncing prompts to Firestore..."
+.venv/bin/python scripts/sync_prompt.py
+
 # ── Step 7: Deploy to Cloud Run ───────────────────────────────────────────────
 echo "--- Deploying to Cloud Run..."
 gcloud run deploy "$SERVICE_NAME" \

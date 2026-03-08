@@ -138,6 +138,45 @@ def confirm_correction(doc_id: str, db) -> None:
     get_corrections.clear()
 
 
+@st.cache_data(ttl=30)
+def get_prompts(_db) -> dict:
+    """Return current core and learned prompts from Firestore."""
+    core = _db.collection("aperture_config").document("prompt_core").get()
+    learned = _db.collection("aperture_config").document("prompt_learned").get()
+    result = {
+        "core": core.to_dict() if core.exists else {},
+        "learned": learned.to_dict() if learned.exists else {},
+    }
+    if result["core"].get("synced_at"):
+        result["core"]["synced_at"] = (
+            result["core"]["synced_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
+        )
+    if result["learned"].get("updated_at"):
+        result["learned"]["updated_at"] = (
+            result["learned"]["updated_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
+        )
+    return result
+
+
+@st.cache_data(ttl=30)
+def get_prompt_history(_db) -> list[dict]:
+    """Past versions of the learned prompt, newest first."""
+    docs = (
+        _db.collection("aperture_prompt_history")
+        .order_by("archived_at", direction="DESCENDING")
+        .limit(20)
+        .stream()
+    )
+    rows = []
+    for doc in docs:
+        d = doc.to_dict()
+        d["_doc_id"] = doc.id
+        if d.get("archived_at"):
+            d["archived_at"] = d["archived_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
+        rows.append(d)
+    return rows
+
+
 def discard_correction(doc_id: str, db) -> None:
     """Delete a correction."""
     db.collection("aperture_corrections").document(doc_id).delete()
