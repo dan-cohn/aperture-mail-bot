@@ -29,7 +29,7 @@ CATEGORY_LABELS = {
     7:  "Aperture/Events/Short-term",
     8:  "Aperture/Planning",
     9:  "Aperture/Reading",
-    10: "Aperture/Lists",
+    10: "Aperture/Autoarchived", # Regular Lists
     11: "Aperture/Unsubscribe",
     # 12: Pure Trash — no label (goes straight to trash)
 }
