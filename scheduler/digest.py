@@ -57,7 +57,7 @@ async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
 
     # Build Telegram message
     now = datetime.now(ZoneInfo(settings.timezone))
-    time_str = now.strftime("%H:%M %Z")
+    time_str = now.strftime("%I:%M %p %Z").lstrip("0")
     total = len(pending)
 
     lines = [f"📋 <b>Email Digest — {time_str}</b>\n"]
