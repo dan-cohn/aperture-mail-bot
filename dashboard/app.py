@@ -9,6 +9,8 @@ Tabs:
   Recent Activity — full triage log with filters
   Silent Actions  — emails processed without a Telegram alert
   Digest Queue    — emails pending the next 07:30 / 17:30 digest
+  Corrections     — user feedback from Telegram, confirm or discard
+  Prompts         — live core and learned prompts from Firestore
 """
 import asyncio
 import sys
@@ -65,7 +67,6 @@ with st.sidebar:
     st.title("🔭 Aperture")
     st.divider()
 
-    # System status
     st.subheader("System Status")
 
     sub_state = get_subscription_state()
@@ -76,11 +77,10 @@ with st.sidebar:
     else:
         st.info("● Unknown", icon="❓")
 
-    # Watch expiry
     watch = get_watch_state(db)
     if watch.get("expiration_iso"):
         expiry = datetime.fromisoformat(watch["expiration_iso"])
-        now = datetime.now(LOCAL_TZ)
+        now = datetime.now(timezone.utc)
         days_left = (expiry - now).days
         if days_left <= 1:
             st.error(f"Watch expires in {days_left}d", icon="⚠️")
@@ -91,7 +91,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Quick actions
     st.subheader("Quick Actions")
 
     col1, col2 = st.columns(2)
@@ -130,32 +129,58 @@ st.header("Aperture Email Dashboard")
 
 log = get_triage_log(db)
 queue = get_summary_queue(db)
-
 corrections = get_corrections(db)
 pending_corrections = [c for c in corrections if not c.get("confirmed")]
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+# ── Tab navigation (session-state backed so reruns don't reset position) ──────
+
+TAB_LABELS = [
     "📊 Overview",
     "📜 Recent Activity",
     "🔕 Silent Actions",
     "📋 Digest Queue",
-    f"✏️ Corrections {'🔴' if pending_corrections else ''}",
+    "✏️ Corrections",
     "📝 Prompts",
-])
+]
 
-# ── Tab 1: Overview ───────────────────────────────────────────────────────────
+tab_display = TAB_LABELS.copy()
+if pending_corrections:
+    tab_display[4] = "✏️ Corrections 🔴"
 
-with tab1:
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = 0
+
+# Sync _nav to tab_display on first run or when a label changes (e.g. corrections badge)
+if st.session_state.get("_nav") not in tab_display:
+    st.session_state["_nav"] = tab_display[st.session_state.active_tab]
+
+st.radio(
+    "Navigation",
+    tab_display,
+    key="_nav",
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+try:
+    active = tab_display.index(st.session_state["_nav"])
+except ValueError:
+    active = 0
+st.session_state.active_tab = active
+st.divider()
+
+# ── Tab 0: Overview ───────────────────────────────────────────────────────────
+
+if active == 0:
     if not log:
         st.info("No triage data yet. Emails will appear here as they are processed.")
     else:
         df = pd.DataFrame(log)
         now = datetime.now(LOCAL_TZ)
 
-        today_df    = df[df["processed_at"] >= now.replace(hour=0, minute=0, second=0)]
-        week_df     = df[df["processed_at"] >= now - timedelta(days=7)]
+        today_df = df[df["processed_at"] >= now.replace(hour=0, minute=0, second=0, microsecond=0)]
+        week_df  = df[df["processed_at"] >= now - timedelta(days=7)]
 
-        # Top metrics
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Today",        len(today_df))
         c2.metric("This Week",    len(week_df))
@@ -164,7 +189,6 @@ with tab1:
 
         st.divider()
 
-        # Action breakdown
         st.subheader("Action Breakdown — Last 7 Days")
         if not week_df.empty:
             action_counts = (
@@ -180,7 +204,6 @@ with tab1:
 
         st.divider()
 
-        # Category breakdown
         st.subheader("Category Breakdown — Last 7 Days")
         if not week_df.empty:
             cat_counts = (
@@ -195,15 +218,14 @@ with tab1:
             st.bar_chart(cat_counts.set_index("label")["count"])
 
 
-# ── Tab 2: Recent Activity ────────────────────────────────────────────────────
+# ── Tab 1: Recent Activity ────────────────────────────────────────────────────
 
-with tab2:
+elif active == 1:
     if not log:
         st.info("No activity yet.")
     else:
         df = pd.DataFrame(log)
 
-        # Filters
         col1, col2 = st.columns([2, 3])
         with col1:
             action_filter = st.multiselect(
@@ -255,9 +277,9 @@ with tab2:
             )
 
 
-# ── Tab 3: Silent Actions ─────────────────────────────────────────────────────
+# ── Tab 2: Silent Actions ─────────────────────────────────────────────────────
 
-with tab3:
+elif active == 2:
     st.caption(
         "Emails processed without a Telegram alert — "
         "archived, trashed, unsubscribed, or left in inbox quietly."
@@ -271,14 +293,14 @@ with tab3:
         col1, col2 = st.columns([2, 3])
         with col1:
             action_filter = st.multiselect(
-                "Filter by action ",  # trailing space avoids key collision with tab2
+                "Filter by action",
                 options=list(SILENT_ACTIONS),
                 default=list(SILENT_ACTIONS),
                 format_func=lambda a: f"{ACTION_EMOJI[a]} {a}",
             )
         with col2:
             date_range = st.radio(
-                "Date range ",
+                "Date range",
                 ["Last 24h", "Last 7d", "Last 30d", "All"],
                 horizontal=True,
                 index=1,
@@ -319,9 +341,9 @@ with tab3:
             )
 
 
-# ── Tab 4: Digest Queue ───────────────────────────────────────────────────────
+# ── Tab 3: Digest Queue ───────────────────────────────────────────────────────
 
-with tab4:
+elif active == 3:
     if not queue:
         st.info("Digest queue is empty — nothing pending for the next send.")
     else:
@@ -345,9 +367,9 @@ with tab4:
         )
 
 
-# ── Tab 5: Corrections ────────────────────────────────────────────────────────
+# ── Tab 4: Corrections ────────────────────────────────────────────────────────
 
-with tab6:
+elif active == 4:
     st.caption(
         "Corrections submitted via the ❌ Wrong Category button in Telegram. "
         "**Confirm** to inject into the live triage prompt. **Discard** to remove."
@@ -356,7 +378,6 @@ with tab6:
     if not corrections:
         st.info("No corrections yet. Tap ❌ Wrong Category on a Telegram alert to create one.")
     else:
-        # ── Pending (unconfirmed) ──────────────────────────────────────────────
         if pending_corrections:
             st.subheader(f"Pending Review ({len(pending_corrections)})")
             for c in pending_corrections:
@@ -383,11 +404,10 @@ with tab6:
         else:
             st.success("No pending corrections — all reviewed.")
 
-        # ── Confirmed (active) ────────────────────────────────────────────────
         confirmed = [c for c in corrections if c.get("confirmed")]
         if confirmed:
             st.divider()
-            st.subheader(f"Active Corrections ({len(confirmed)})  — injected into every triage call")
+            st.subheader(f"Active Corrections ({len(confirmed)}) — injected into every triage call")
             rows = []
             for c in confirmed:
                 rows.append({
@@ -399,20 +419,22 @@ with tab6:
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 
-# ── Tab 6: Prompts ────────────────────────────────────────────────────────────
+# ── Tab 5: Prompts ────────────────────────────────────────────────────────────
 
-with tab6:
+elif active == 5:
     st.caption(
         "Live prompts loaded from Firestore. "
         "Update core via `scripts/sync_prompt.py`, learned via `--learned FILE`."
     )
     prompts = get_prompts(db)
 
-    # Core prompt
     core = prompts.get("core", {})
     core_content = core.get("content", "")
     core_synced = core.get("synced_at")
-    core_meta = f"Synced: {core_synced.strftime('%Y-%m-%d %H:%M %Z') if core_synced else 'unknown'}  |  {len(core_content):,} chars"
+    core_meta = (
+        f"Synced: {core_synced.strftime('%Y-%m-%d %H:%M %Z') if core_synced else 'unknown'}"
+        f"  |  {len(core_content):,} chars"
+    )
     with st.expander(f"**Core prompt** — {core_meta}", expanded=False):
         if core_content:
             st.text(core_content)
@@ -421,23 +443,21 @@ with tab6:
 
     st.divider()
 
-    # Learned prompt
     learned = prompts.get("learned", {})
     learned_content = learned.get("content", "")
     learned_version = learned.get("version", "—")
     learned_updated = learned.get("updated_at")
     learned_meta = (
         f"v{learned_version}  |  "
-        f"Updated: {learned_updated.strftime('%Y-%m-%d %H:%M %Z') if learned_updated else 'unknown'}  |  "
-        f"{len(learned_content):,} chars"
+        f"Updated: {learned_updated.strftime('%Y-%m-%d %H:%M %Z') if learned_updated else 'unknown'}"
+        f"  |  {len(learned_content):,} chars"
     )
     with st.expander(f"**Learned prompt** — {learned_meta}", expanded=True):
         if learned_content:
             st.text(learned_content)
         else:
-            st.info("Learned prompt is empty. Add freeform rules via `scripts/sync_prompt.py --learned FILE`.")
+            st.info("Learned prompt is empty. Add rules via `scripts/sync_prompt.py --learned FILE`.")
 
-    # Version history
     history = get_prompt_history(db)
     if history:
         st.divider()
@@ -446,8 +466,8 @@ with tab6:
             archived = h.get("archived_at")
             label = (
                 f"v{h.get('version')}  —  "
-                f"archived {archived.strftime('%Y-%m-%d %H:%M %Z') if archived else 'unknown'}  |  "
-                f"{len(h.get('content', '')):,} chars"
+                f"archived {archived.strftime('%Y-%m-%d %H:%M %Z') if archived else 'unknown'}"
+                f"  |  {len(h.get('content', '')):,} chars"
             )
             with st.expander(label, expanded=False):
                 st.text(h.get("content", "(empty)"))
