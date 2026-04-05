@@ -166,6 +166,41 @@ else
   echo "WARNING: TELEGRAM_BOT_TOKEN not found in .env — skipping webhook registration"
 fi
 
+if [ "$QUICK" = false ]; then
+  # ── Step 10: Create/update Cloud Scheduler jobs ──────────────────────────────
+  echo "--- Configuring Cloud Scheduler jobs..."
+  SCHEDULER_SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+
+  upsert_scheduler_job() {
+    local job_name="$1"
+    local schedule="$2"
+    local uri="$3"
+    local description="$4"
+    if gcloud scheduler jobs describe "$job_name" --location="$REGION" --project="$PROJECT_ID" &>/dev/null; then
+      gcloud scheduler jobs update http "$job_name" \
+        --location="$REGION" --project="$PROJECT_ID" \
+        --schedule="$schedule" --time-zone="America/Chicago" \
+        --uri="$uri" --http-method=POST \
+        --oidc-service-account-email="$SCHEDULER_SA" \
+        --headers="X-Aperture-Secret=$(grep '^INTERNAL_SECRET=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)" \
+        --quiet
+    else
+      gcloud scheduler jobs create http "$job_name" \
+        --location="$REGION" --project="$PROJECT_ID" \
+        --description="$description" \
+        --schedule="$schedule" --time-zone="America/Chicago" \
+        --uri="$uri" --http-method=POST \
+        --oidc-service-account-email="$SCHEDULER_SA" \
+        --headers="X-Aperture-Secret=$(grep '^INTERNAL_SECRET=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)" \
+        --quiet
+    fi
+    echo "  ✓ $job_name ($schedule)"
+  }
+
+  upsert_scheduler_job "aperture-digest-morning" "30 7 * * *"  "$SERVICE_URL/internal/digest/morning" "Morning archive digest"
+  upsert_scheduler_job "aperture-digest-evening" "30 17 * * *" "$SERVICE_URL/internal/digest/evening" "Evening inbox digest"
+fi
+
 echo ""
 echo "=== Deployment Complete ==="
 echo "Service URL: $SERVICE_URL"

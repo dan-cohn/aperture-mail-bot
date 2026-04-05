@@ -81,11 +81,13 @@ async def execute(
         # Action D: label + mark read + remove from inbox
         add = [label_id] if label_id else []
         modify_message(gmail_service, message_id, add_labels=add, remove_labels=["UNREAD", "INBOX"])
+        _enqueue_archive(db, triage, message_id, thread_id, sender, subject, action)
 
     elif action == "UNSUBSCRIBE":
         # Action E: label + archive
         add = [label_id] if label_id else []
         modify_message(gmail_service, message_id, add_labels=add, remove_labels=["INBOX"])
+        _enqueue_archive(db, triage, message_id, thread_id, sender, subject, action)
 
     elif action == "TRASH":
         # Action F: trash (no label)
@@ -105,6 +107,33 @@ def _get_label(gmail_service, name: str) -> str:
     if name not in _label_cache:
         _label_cache[name] = get_or_create_label(gmail_service, name)
     return _label_cache[name]
+
+
+def _enqueue_archive(
+    db: firestore.Client,
+    triage: TriageResult,
+    message_id: str,
+    thread_id: str,
+    sender: str,
+    subject: str,
+    action: str,
+) -> None:
+    """Write an archive queue entry for the morning digest."""
+    db.collection("aperture_archive_queue").add(
+        {
+            "message_id": message_id,
+            "thread_id": thread_id,
+            "category": triage.category,
+            "category_name": triage.category_name,
+            "summary": triage.summary,
+            "sender": sender,
+            "subject": subject,
+            "action": action,
+            "enqueued_at": firestore.SERVER_TIMESTAMP,
+            "dispatched": False,
+        }
+    )
+    logger.debug(f"Enqueued archive: message={message_id} cat={triage.category} action={action}")
 
 
 def _enqueue_summary(

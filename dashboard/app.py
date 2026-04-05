@@ -26,6 +26,7 @@ from dashboard.data import (
     LOCAL_TZ,
     confirm_correction,
     discard_correction,
+    get_archive_queue,
     get_control_state,
     get_corrections,
     get_db,
@@ -107,15 +108,19 @@ with st.sidebar:
             st.success("Resumed.")
             st.rerun()
 
-    if st.button("📬 Send Digest Now", width="stretch"):
+    if st.button("🗄️ Send Morning Digest Now", width="stretch"):
+        from notifications.telegram import TelegramNotifier
+        from scheduler.digest import send_archive_digest
+        with st.spinner("Sending morning digest…"):
+            count = asyncio.run(send_archive_digest(db, TelegramNotifier()))
+        st.success(f"Sent {count} items.") if count else st.info("Archive queue is empty.")
+
+    if st.button("📬 Send Evening Digest Now", width="stretch"):
         from notifications.telegram import TelegramNotifier
         from scheduler.digest import send_digest
-        with st.spinner("Sending digest…"):
+        with st.spinner("Sending evening digest…"):
             count = asyncio.run(send_digest(db, TelegramNotifier()))
-        if count:
-            st.success(f"Sent {count} items.")
-        else:
-            st.info("Queue is empty.")
+        st.success(f"Sent {count} items.") if count else st.info("Inbox queue is empty.")
 
     st.divider()
     if st.button("🔄 Refresh", width="stretch"):
@@ -129,6 +134,7 @@ st.header("Aperture Email Dashboard")
 
 log = get_triage_log(db)
 queue = get_summary_queue(db)
+archive_queue = get_archive_queue(db)
 corrections = get_corrections(db)
 pending_corrections = [c for c in corrections if not c.get("confirmed")]
 
@@ -344,27 +350,43 @@ elif active == 2:
 # ── Tab 3: Digest Queue ───────────────────────────────────────────────────────
 
 elif active == 3:
-    if not queue:
-        st.info("Digest queue is empty — nothing pending for the next send.")
-    else:
-        st.caption(f"{len(queue)} email{'s' if len(queue) != 1 else ''} pending")
-
-        q_df = pd.DataFrame(queue)
-        q_df["Enqueued"] = pd.to_datetime(q_df["enqueued_at"]).dt.strftime("%m/%d %H:%M")
-        q_df["Category"] = q_df.apply(
-            lambda r: f"[{r['category']}] {r['category_name']}", axis=1
-        )
-        q_df["Sender"] = q_df["sender"].str[:45]
-        q_df["Subject"] = q_df["subject"].str[:60]
-
+    def _render_queue(items: list[dict], empty_msg: str) -> None:
+        if not items:
+            st.info(empty_msg)
+            return
+        st.caption(f"{len(items)} email{'s' if len(items) != 1 else ''} pending")
+        df = pd.DataFrame(items)
+        df["Enqueued"] = pd.to_datetime(df["enqueued_at"]).dt.strftime("%m/%d %H:%M")
+        df["Category"] = df.apply(lambda r: f"[{r['category']}] {r['category_name']}", axis=1)
+        df["Sender"] = df["sender"].str[:45]
+        df["Subject"] = df["subject"].str[:60]
         st.dataframe(
-            q_df[["Enqueued", "Sender", "Subject", "Category", "summary"]],
-            column_config={
-                "summary": st.column_config.TextColumn("Summary", width="large"),
-            },
+            df[["Enqueued", "Sender", "Subject", "Category", "summary"]],
+            column_config={"summary": st.column_config.TextColumn("Summary", width="large")},
             width="stretch",
             hide_index=True,
         )
+
+    st.subheader("🗄️ Morning Digest — Auto-archived")
+    _render_queue(archive_queue, "Archive queue is empty — nothing pending for the 7:30 AM digest.")
+
+    st.divider()
+
+    st.subheader("📋 Evening Digest — Inbox")
+    _render_queue(queue, "Inbox queue is empty — nothing pending for the 5:30 PM digest.")
+
+    if queue:
+        if st.button("📬 Send Evening Digest Now", width="content"):
+            from notifications.telegram import TelegramNotifier
+            from scheduler.digest import send_digest
+            with st.spinner("Sending digest…"):
+                count = asyncio.run(send_digest(db, TelegramNotifier()))
+            if count:
+                st.success(f"Sent {count} items.")
+            else:
+                st.info("Nothing to send.")
+            st.cache_data.clear()
+            st.rerun()
 
 
 # ── Tab 4: Corrections ────────────────────────────────────────────────────────

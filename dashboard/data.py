@@ -63,6 +63,21 @@ def get_summary_queue(_db) -> list[dict]:
     return rows
 
 
+@st.cache_data(ttl=30)
+def get_archive_queue(_db) -> list[dict]:
+    """Undispatched items waiting for the next morning archive digest."""
+    docs = _db.collection("aperture_archive_queue").stream()
+    rows = []
+    for doc in docs:
+        d = doc.to_dict()
+        if d.get("dispatched", False):
+            continue
+        if d.get("enqueued_at"):
+            d["enqueued_at"] = d["enqueued_at"].replace(tzinfo=timezone.utc).astimezone(LOCAL_TZ)
+        rows.append(d)
+    return rows
+
+
 @st.cache_data(ttl=60)
 def get_watch_state(_db) -> dict:
     doc = _db.collection("aperture_config").document("gmail_watch").get()

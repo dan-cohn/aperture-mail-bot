@@ -17,7 +17,7 @@ from gmail.pubsub_handler import process_notification
 from gmail.watch import setup_watch
 from notifications.telegram import TelegramNotifier
 from notifications.telegram_webhook import handle_callback
-from scheduler.digest import send_digest
+from scheduler.digest import send_archive_digest, send_digest
 from scheduler.snooze import process_snoozes
 from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
 from triage.llm_client import get_triage_client
@@ -170,13 +170,38 @@ async def telegram_webhook(request: Request):
 # ── Internal endpoints (Cloud Scheduler) ─────────────────────────────────────
 
 @app.post(
-    "/internal/digest",
+    "/internal/digest/morning",
     status_code=status.HTTP_200_OK,
     tags=["internal"],
     dependencies=[Depends(verify_internal_secret)],
 )
+async def trigger_morning_digest():
+    """Send the morning archive digest. Triggered at 07:30."""
+    count = await send_archive_digest(db, telegram)
+    return {"dispatched": count}
+
+
+@app.post(
+    "/internal/digest/evening",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_evening_digest():
+    """Send the evening inbox digest. Triggered at 17:30."""
+    count = await send_digest(db, telegram)
+    return {"dispatched": count}
+
+
+@app.post(
+    "/internal/digest",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+    include_in_schema=False,
+)
 async def trigger_digest():
-    """Send the daily email digest. Triggered at 07:30 and 17:30."""
+    """Legacy alias → evening inbox digest."""
     count = await send_digest(db, telegram)
     return {"dispatched": count}
 
