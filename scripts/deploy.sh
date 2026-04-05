@@ -176,13 +176,15 @@ if [ "$QUICK" = false ]; then
     local schedule="$2"
     local uri="$3"
     local description="$4"
+    local secret
+    secret=$(grep '^INTERNAL_SECRET=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)
     if gcloud scheduler jobs describe "$job_name" --location="$REGION" --project="$PROJECT_ID" &>/dev/null; then
       gcloud scheduler jobs update http "$job_name" \
         --location="$REGION" --project="$PROJECT_ID" \
         --schedule="$schedule" --time-zone="America/Chicago" \
         --uri="$uri" --http-method=POST \
         --oidc-service-account-email="$SCHEDULER_SA" \
-        --headers="X-Aperture-Secret=$(grep '^INTERNAL_SECRET=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)" \
+        --update-headers "X-Aperture-Secret=$secret" \
         --quiet
     else
       gcloud scheduler jobs create http "$job_name" \
@@ -191,7 +193,7 @@ if [ "$QUICK" = false ]; then
         --schedule="$schedule" --time-zone="America/Chicago" \
         --uri="$uri" --http-method=POST \
         --oidc-service-account-email="$SCHEDULER_SA" \
-        --headers="X-Aperture-Secret=$(grep '^INTERNAL_SECRET=' .env | cut -d'=' -f2- | sed 's/#.*//' | xargs)" \
+        --headers "X-Aperture-Secret=$secret" \
         --quiet
     fi
     echo "  ✓ $job_name ($schedule)"
