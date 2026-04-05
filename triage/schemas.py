@@ -25,7 +25,7 @@ ACTION_MAP = {
     5:  "SUMMARY",      # Action B
     6:  "INBOX",        # Action C
     7:  "INBOX",        # Action C
-    8:  "INBOX",        # Action C
+    8:  "ARCHIVE",      # Action D
     9:  "INBOX",        # Action C
     10: "ARCHIVE",      # Action D
     11: "UNSUBSCRIBE",  # Action E
