@@ -40,18 +40,20 @@ async def send_unsubscribe_reminder(
         logger.info("Unsubscribe reminder: label '%s' does not exist yet.", _LABEL_NAME)
         return 0
 
-    # ── List messages in the label ────────────────────────────────────────────
+    # ── List unread messages in the label ────────────────────────────────────
+    # Filtering by UNREAD excludes emails the user has already read or deleted,
+    # so the digest only shows actionable items. Check runs just before sending.
     response = (
         gmail_service.users()
         .messages()
-        .list(userId="me", labelIds=[label_id], maxResults=50)
+        .list(userId="me", labelIds=[label_id, "UNREAD"], maxResults=50)
         .execute()
     )
     message_stubs = response.get("messages", [])
     total = response.get("resultSizeEstimate", len(message_stubs))
 
     if not message_stubs:
-        logger.info("Unsubscribe reminder: label exists but has no messages.")
+        logger.info("Unsubscribe reminder: no unread messages in label.")
         return 0
 
     # ── Collect unique sender display names ───────────────────────────────────
