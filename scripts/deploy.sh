@@ -26,7 +26,7 @@ if [[ "${1:-}" == "--quick" ]]; then
   QUICK=true
 fi
 
-echo "=== Aperture Deployment${QUICK:+ (quick mode)} ==="
+echo "=== Aperture Deployment$([ "$QUICK" = "true" ] && echo " (quick mode)") ==="
 echo "Project : $PROJECT_ID"
 echo "Region  : $REGION"
 echo "Image   : $IMAGE"
