@@ -12,6 +12,7 @@ Usage:
   python scripts/sync_prompt.py --show                # print current prompts from Firestore
 """
 import argparse
+import hashlib
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,8 +35,16 @@ def sync_core(db, prompt_path: Path) -> None:
         print(f"ERROR: .prompt file not found at {prompt_path}")
         sys.exit(1)
     content = prompt_path.read_text().strip()
+    new_hash = hashlib.sha256(content.encode()).hexdigest()
+
+    doc = db.collection("aperture_config").document("prompt_core").get()
+    if doc.exists and doc.to_dict().get("hash") == new_hash:
+        print(f"Core prompt unchanged — skipping ({len(content):,} chars).")
+        return
+
     db.collection("aperture_config").document("prompt_core").set({
         "content": content,
+        "hash": new_hash,
         "synced_at": datetime.now(timezone.utc),
     })
     print(f"Core prompt synced ({len(content):,} chars).")
