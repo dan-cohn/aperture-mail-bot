@@ -76,6 +76,15 @@ class TelegramNotifier:
         """Send a plain HTML message (for summaries, reminders, etc.)."""
         await self._send_message(text)
 
+    async def send_digest_with_snooze(self, text: str, digest_type: str) -> None:
+        """Send a digest message with a Snooze button. digest_type: 'morning' | 'evening'."""
+        reply_markup = {
+            "inline_keyboard": [[
+                {"text": "💤 Snooze", "callback_data": f"snooze_digest:{digest_type}"},
+            ]]
+        }
+        await self._send_message(text, reply_markup)
+
     async def _send_message(self, text: str, reply_markup: dict | None = None) -> None:
         payload: dict = {
             "chat_id": self._chat_id,

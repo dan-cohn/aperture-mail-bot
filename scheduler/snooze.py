@@ -9,6 +9,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1 import FieldFilter
 
 from notifications.telegram import TelegramNotifier
+from scheduler.digest import send_archive_digest, send_digest
 from triage.schemas import TriageResult
 
 logger = logging.getLogger(__name__)
@@ -39,29 +40,37 @@ async def process_snoozes(db: firestore.Client, telegram: TelegramNotifier) -> i
         if snooze_until > now:
             continue  # still sleeping
 
-        # Reconstruct a minimal TriageResult for the alert
-        triage = TriageResult(
-            category=data.get("category", 1),
-            is_urgent=True,
-            summary=data.get("summary", "(No summary available)"),
-            reasoning="Snooze period expired.",
-            suggested_action="ALERT",
-        )
-        subject = f"💤 [Snoozed] {data.get('subject', '')}"
-
-        await telegram.send_alert(
-            triage=triage,
-            sender=data.get("sender", ""),
-            subject=subject,
-            message_id=data.get("message_id", ""),
-        )
+        if data.get("type") == "digest":
+            # Re-run the digest — filtering handles any changes since snooze
+            digest_type = data.get("digest_type", "evening")
+            if digest_type == "morning":
+                await send_archive_digest(db, telegram)
+            else:
+                await send_digest(db, telegram)
+            logger.info(f"Digest snooze re-fired: type={digest_type}")
+        else:
+            # Reconstruct a minimal TriageResult for the alert
+            triage = TriageResult(
+                category=data.get("category", 1),
+                is_urgent=True,
+                summary=data.get("summary", "(No summary available)"),
+                reasoning="Snooze period expired.",
+                suggested_action="ALERT",
+            )
+            subject = f"💤 [Snoozed] {data.get('subject', '')}"
+            await telegram.send_alert(
+                triage=triage,
+                sender=data.get("sender", ""),
+                subject=subject,
+                message_id=data.get("message_id", ""),
+            )
+            logger.info(f"Snooze re-fired: message_id={data.get('message_id')}")
 
         doc.reference.update({
             "sent":    True,
             "sent_at": firestore.SERVER_TIMESTAMP,
         })
         count += 1
-        logger.info(f"Snooze re-fired: message_id={data.get('message_id')}")
 
     if count:
         logger.info(f"Processed {count} expired snooze(s).")

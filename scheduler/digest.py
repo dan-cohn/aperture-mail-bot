@@ -120,7 +120,7 @@ async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} waiting in your inbox.</i>")
 
-    await telegram.send_text("\n".join(lines))
+    await telegram.send_digest_with_snooze("\n".join(lines), "evening")
 
     # Mark all dispatched in a single batch write (inbox items + stale items)
     batch = db.batch()
@@ -184,7 +184,7 @@ async def send_archive_digest(db: firestore.Client, telegram: TelegramNotifier) 
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} auto-archived since the last digest.</i>")
 
-    await telegram.send_text("\n".join(lines))
+    await telegram.send_digest_with_snooze("\n".join(lines), "morning")
 
     # Mark all dispatched
     batch = db.batch()

@@ -8,6 +8,9 @@ Handles inline button presses on Aperture alert messages:
   snooze:{gmail_id}                        → show snooze duration picker
   snooze_for:{gmail_id}:{duration}         → store snooze (duration: 1, 4, or "morning")
   cancel:{gmail_id}                        → dismiss picker, restore original buttons
+  snooze_digest:{digest_type}              → show digest snooze duration picker
+  snooze_digest_for:{digest_type}:{dur}    → store digest snooze
+  cancel_digest:{digest_type}              → dismiss picker, restore snooze button
   noop                                     → silently acknowledge (disabled buttons)
 """
 import logging
@@ -80,6 +83,19 @@ async def handle_callback(callback_query: dict, db: firestore.Client) -> None:
             gmail_id = parts[1]
             await _answer(query_id, "Cancelled.")
             await _restore_alert_buttons(chat_id, tg_msg_id, gmail_id)
+
+        elif action == "snooze_digest" and len(parts) == 2:
+            digest_type = parts[1]
+            await _show_digest_snooze_picker(query_id, chat_id, tg_msg_id, digest_type)
+
+        elif action == "snooze_digest_for" and len(parts) == 3:
+            digest_type, duration = parts[1], parts[2]
+            await _store_digest_snooze(query_id, chat_id, tg_msg_id, digest_type, duration, db)
+
+        elif action == "cancel_digest" and len(parts) == 2:
+            digest_type = parts[1]
+            await _answer(query_id, "Cancelled.")
+            await _restore_digest_snooze_button(chat_id, tg_msg_id, digest_type)
 
         else:
             await _answer(query_id)
@@ -210,6 +226,68 @@ async def _store_snooze(
         {"text": f"💤 Snoozed — rings at {until_str}", "callback_data": "noop"}
     ]])
     logger.info(f"Snooze stored: {gmail_id} | until={snooze_until.isoformat()}")
+
+
+async def _show_digest_snooze_picker(
+    query_id: str, chat_id, tg_msg_id: int, digest_type: str
+) -> None:
+    keyboard = [
+        [
+            {"text": "💤 1 hour",  "callback_data": f"snooze_digest_for:{digest_type}:1"},
+            {"text": "💤 4 hours", "callback_data": f"snooze_digest_for:{digest_type}:4"},
+        ],
+        [{"text": "🌅 Tomorrow morning", "callback_data": f"snooze_digest_for:{digest_type}:morning"}],
+        [{"text": "✕ Cancel", "callback_data": f"cancel_digest:{digest_type}"}],
+    ]
+    await _answer(query_id, "Choose snooze duration:")
+    await _edit_keyboard(chat_id, tg_msg_id, keyboard)
+
+
+async def _store_digest_snooze(
+    query_id: str,
+    chat_id,
+    tg_msg_id: int,
+    digest_type: str,
+    duration: str,
+    db: firestore.Client,
+) -> None:
+    """Write a digest snooze entry to aperture_snoozes."""
+    now_utc = datetime.now(timezone.utc)
+    user_tz = ZoneInfo(settings.timezone)
+
+    if duration == "morning":
+        tomorrow_local = (datetime.now(user_tz) + timedelta(days=1)).replace(
+            hour=7, minute=30, second=0, microsecond=0
+        )
+        snooze_until = tomorrow_local.astimezone(timezone.utc)
+        label = "tomorrow morning"
+    else:
+        hours = int(duration)
+        snooze_until = now_utc + timedelta(hours=hours)
+        label = f"{hours} hour{'s' if hours != 1 else ''}"
+
+    db.collection("aperture_snoozes").add({
+        "type":        "digest",
+        "digest_type": digest_type,
+        "snooze_until": snooze_until,
+        "sent":         False,
+        "created_at":   firestore.SERVER_TIMESTAMP,
+    })
+
+    until_local = snooze_until.astimezone(user_tz)
+    until_str = until_local.strftime("%I:%M %p %Z").lstrip("0")
+    await _answer(query_id, f"Snoozed for {label}.")
+    await _edit_keyboard(chat_id, tg_msg_id, [[
+        {"text": f"💤 Snoozed — rings at {until_str}", "callback_data": "noop"}
+    ]])
+    logger.info(f"Digest snooze stored: type={digest_type} | until={snooze_until.isoformat()}")
+
+
+async def _restore_digest_snooze_button(chat_id, tg_msg_id: int, digest_type: str) -> None:
+    """Restore the Snooze button on a digest message after cancel."""
+    await _edit_keyboard(chat_id, tg_msg_id, [[
+        {"text": "💤 Snooze", "callback_data": f"snooze_digest:{digest_type}"}
+    ]])
 
 
 async def _restore_alert_buttons(chat_id, tg_msg_id: int, gmail_id: str) -> None:
