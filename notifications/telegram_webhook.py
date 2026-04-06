@@ -202,7 +202,9 @@ async def _store_snooze(
         "created_at":    firestore.SERVER_TIMESTAMP,
     })
 
-    until_str = snooze_until.strftime("%I:%M %p UTC").lstrip("0")
+    local_tz = ZoneInfo(settings.timezone)
+    until_local = snooze_until.astimezone(local_tz)
+    until_str = until_local.strftime("%I:%M %p %Z").lstrip("0")
     await _answer(query_id, f"Snoozed for {label}.")
     await _edit_keyboard(chat_id, tg_msg_id, [[
         {"text": f"💤 Snoozed — rings at {until_str}", "callback_data": "noop"}
