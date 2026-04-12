@@ -1,3 +1,5 @@
+protocol: http2
+
 ingress:
   - hostname: aperture.letterartonline.com
     service: http://localhost:8080
