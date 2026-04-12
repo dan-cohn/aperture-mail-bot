@@ -22,11 +22,18 @@ IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME"
 
 # --quick skips one-time setup (API enables, IAM grants, secret sync)
 QUICK=false
-if [[ "${1:-}" == "--quick" ]]; then
-  QUICK=true
-fi
+SKIP_DASHBOARD=false
+for arg in "$@"; do
+  case "$arg" in
+    --quick)           QUICK=true ;;
+    --skip-dashboard)  SKIP_DASHBOARD=true ;;
+  esac
+done
 
-echo "=== Aperture Deployment$([ "$QUICK" = "true" ] && echo " (quick mode)") ==="
+DEPLOY_FLAGS=""
+[ "$QUICK" = "true" ] && DEPLOY_FLAGS=" (quick mode)"
+[ "$SKIP_DASHBOARD" = "true" ] && DEPLOY_FLAGS="$DEPLOY_FLAGS (no dashboard)"
+echo "=== Aperture Deployment${DEPLOY_FLAGS} ==="
 echo "Project : $PROJECT_ID"
 echo "Region  : $REGION"
 echo "Image   : $IMAGE"
@@ -88,7 +95,7 @@ if [ "$QUICK" = false ]; then
       value="${value%%#*}"
       value="${value%"${value##*[![:space:]]}"}"  # rtrim
       case "$key" in
-        TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET)
+        TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET|CLOUDFLARE_TUNNEL_TOKEN)
           push_secret "aperture-$key" "$value"
           ;;
       esac
@@ -106,7 +113,7 @@ if [ "$QUICK" = false ]; then
     --member="serviceAccount:$SA" \
     --role="roles/datastore.user" --quiet
 
-  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET; do
+  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN; do
     gcloud secrets add-iam-policy-binding "aperture-$secret" \
       --member="serviceAccount:$SA" \
       --role="roles/secretmanager.secretAccessor" \
@@ -166,8 +173,40 @@ else
   echo "WARNING: TELEGRAM_BOT_TOKEN not found in .env — skipping webhook registration"
 fi
 
+# ── Step 10: Build and deploy dashboard ──────────────────────────────────────
+if [ "$SKIP_DASHBOARD" = true ]; then
+  echo "--- Skipping dashboard (--skip-dashboard)"
+else
+DASHBOARD_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/aperture-dashboard"
+
+echo "--- Building dashboard image..."
+docker buildx build \
+  --platform linux/amd64 \
+  --file Dockerfile.dashboard \
+  --cache-from "type=registry,ref=$DASHBOARD_IMAGE:latest" \
+  --cache-to "type=inline" \
+  -t "$DASHBOARD_IMAGE:latest" \
+  --push \
+  .
+
+echo "--- Deploying dashboard to Cloud Run..."
+gcloud run deploy aperture-dashboard \
+  --image="$DASHBOARD_IMAGE:latest" \
+  --platform=managed \
+  --region="$REGION" \
+  --project="$PROJECT_ID" \
+  --no-allow-unauthenticated \
+  --min-instances=1 \
+  --max-instances=1 \
+  --memory=512Mi \
+  --cpu=1 \
+  --timeout=60 \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,TIMEZONE=America/Chicago" \
+  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,CLOUDFLARE_TUNNEL_TOKEN=aperture-CLOUDFLARE_TUNNEL_TOKEN:latest"
+fi  # end skip-dashboard check
+
 if [ "$QUICK" = false ]; then
-  # ── Step 10: Create/update Cloud Scheduler jobs ──────────────────────────────
+  # ── Step 11: Create/update Cloud Scheduler jobs ──────────────────────────────
   echo "--- Configuring Cloud Scheduler jobs..."
   SCHEDULER_SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
 
