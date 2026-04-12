@@ -2,7 +2,7 @@
 set -e
 
 # Start cloudflared tunnel in background — outbound to Cloudflare edge
-cloudflared tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN" &
+cloudflared --config /app/dashboard/cloudflared-config.yml tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN" &
 
 # Streamlit is the foreground process — Cloud Run health-checks this port
 exec streamlit run dashboard/app.py \
