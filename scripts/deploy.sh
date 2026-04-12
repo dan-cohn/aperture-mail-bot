@@ -198,9 +198,10 @@ gcloud run deploy aperture-dashboard \
   --no-allow-unauthenticated \
   --min-instances=1 \
   --max-instances=1 \
-  --memory=512Mi \
+  --memory=1Gi \
   --cpu=1 \
-  --timeout=60 \
+  --no-cpu-throttling \
+  --timeout=300 \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,TIMEZONE=America/Chicago,CLOUDFLARE_TUNNEL_HOSTNAME=$(grep '^CLOUDFLARE_TUNNEL_HOSTNAME=' .env | cut -d'=' -f2-)" \
   --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,CLOUDFLARE_TUNNEL_TOKEN=aperture-CLOUDFLARE_TUNNEL_TOKEN:latest"
 fi  # end skip-dashboard check
