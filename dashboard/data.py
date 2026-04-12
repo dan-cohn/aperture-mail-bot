@@ -28,7 +28,7 @@ def get_db():
 
 
 @st.cache_data(ttl=60)
-def get_triage_log(_db, limit: int = 100_000) -> list[dict]:
+def get_triage_log(_db, limit: int = 1_000) -> list[dict]:
     """Most recent triage decisions, newest first."""
     from google.cloud import firestore
     docs = (
