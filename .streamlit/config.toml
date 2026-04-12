@@ -1,2 +1,6 @@
 [client]
 toolbarMode = "minimal"
+
+[server]
+enableCORS = false
+enableXsrfProtection = false
