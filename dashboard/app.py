@@ -58,7 +58,7 @@ ACTION_EMOJI = {
     "TRASH":       "🗑️",
 }
 
-SILENT_ACTIONS = {"INBOX", "ARCHIVE", "UNSUBSCRIBE", "TRASH"}
+SILENT_ACTIONS = {"ARCHIVE", "UNSUBSCRIBE", "TRASH"}
 
 db = get_db()
 
