@@ -3,7 +3,7 @@ Action executor — maps a TriageResult to a concrete Gmail + Telegram operation
 
 Action A  (cat 1–2)   ALERT       : Star + label + leave unread + Telegram immediate alert
 Action B  (cat 3–5)   SUMMARY     : Label + leave unread + enqueue for daily digest
-Action C  (cat 6–7,9) INBOX       : Label + leave unread in inbox
+Action C  (cat 6–7,9) INBOX       : Label + mark read + leave in inbox
 Action D  (cat 8,10)  ARCHIVE     : Label + mark read + remove from inbox + enqueue morning digest
 Action E  (cat 11)    UNSUBSCRIBE : Label 'Aperture/Unsubscribe' + archive
 Action F  (cat 12)    TRASH       : Move to trash (no label)
@@ -73,9 +73,9 @@ async def execute(
         _enqueue_summary(db, triage, message_id, thread_id, sender, subject)
 
     elif action == "INBOX":
-        # Action C: label + leave unread in inbox
+        # Action C: label + mark read + leave in inbox
         if label_id:
-            modify_message(gmail_service, message_id, add_labels=[label_id], remove_labels=[])
+            modify_message(gmail_service, message_id, add_labels=[label_id], remove_labels=["UNREAD"])
 
     elif action == "ARCHIVE":
         # Action D: label + mark read + remove from inbox
