@@ -153,7 +153,7 @@ WEBHOOK_SECRET=$(grep '^TELEGRAM_WEBHOOK_SECRET=' .env | cut -d'=' -f2- | sed 's
 
 if [ -n "$BOT_TOKEN" ]; then
   WEBHOOK_URL="$SERVICE_URL/webhook/telegram"
-  PAYLOAD="{\"url\": \"$WEBHOOK_URL\", \"allowed_updates\": [\"callback_query\"]"
+  PAYLOAD="{\"url\": \"$WEBHOOK_URL\", \"allowed_updates\": [\"callback_query\", \"message\"]"
   if [ -n "$WEBHOOK_SECRET" ]; then
     PAYLOAD="$PAYLOAD, \"secret_token\": \"$WEBHOOK_SECRET\""
   fi
