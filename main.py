@@ -16,6 +16,7 @@ from gmail.client import build_gmail_service
 from gmail.pubsub_handler import process_notification
 from gmail.watch import setup_watch
 from notifications.telegram import TelegramNotifier
+from notifications.telegram_commands import handle_message
 from notifications.telegram_webhook import handle_callback
 from scheduler.digest import send_archive_digest, send_digest
 from scheduler.snooze import process_snoozes
@@ -160,9 +161,18 @@ async def telegram_webhook(request: Request):
 
     update = await request.json()
     callback_query = update.get("callback_query")
+    message = update.get("message")
 
     if callback_query:
-        await handle_callback(callback_query, db)
+        chat_id = str(callback_query.get("message", {}).get("chat", {}).get("id", ""))
+        if chat_id == settings.telegram_chat_id:
+            await handle_callback(callback_query, db)
+
+    elif message:
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        text = message.get("text", "").strip()
+        if chat_id == settings.telegram_chat_id and text:
+            await handle_message(text, db, telegram.send_text)
 
     return {"ok": True}
 

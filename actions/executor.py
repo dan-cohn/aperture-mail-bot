@@ -14,6 +14,7 @@ from google.cloud import firestore
 
 from gmail.client import get_or_create_label, modify_message, trash_message
 from notifications.telegram import TelegramNotifier
+from notifications.telegram_commands import is_allowlisted
 from triage.schemas import TriageResult
 
 logger = logging.getLogger(__name__)
@@ -84,9 +85,16 @@ async def execute(
         _enqueue_archive(db, triage, message_id, thread_id, sender, subject, action)
 
     elif action == "UNSUBSCRIBE":
-        # Action E: label + archive
-        add = [label_id] if label_id else []
-        modify_message(gmail_service, message_id, add_labels=add, remove_labels=["INBOX"])
+        if is_allowlisted(db, sender):
+            # Treat as cat-10 (Regular Lists): archive + enqueue for morning digest
+            cat10_label = _get_label(gmail_service, CATEGORY_LABELS[10])
+            modify_message(gmail_service, message_id, add_labels=[cat10_label], remove_labels=["UNREAD", "INBOX"])
+            _enqueue_archive(db, triage.model_copy(update={"category": 10}), message_id, thread_id, sender, subject, "ARCHIVE")
+            logger.info(f"Allowlisted sender '{sender}' — archived as cat-10 instead of unsubscribe")
+        else:
+            # Action E: label + archive
+            add = [label_id] if label_id else []
+            modify_message(gmail_service, message_id, add_labels=add, remove_labels=["INBOX"])
 
     elif action == "TRASH":
         # Action F: trash (no label)
