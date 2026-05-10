@@ -97,6 +97,10 @@ async def handle_callback(callback_query: dict, db: firestore.Client) -> None:
             await _answer(query_id, "Cancelled.")
             await _restore_digest_snooze_button(chat_id, tg_msg_id, digest_type)
 
+        elif action == "approve_correction" and len(parts) == 2:
+            doc_id = parts[1]
+            await _approve_correction(query_id, chat_id, tg_msg_id, doc_id, db)
+
         else:
             await _answer(query_id)
 
@@ -281,6 +285,30 @@ async def _store_digest_snooze(
         {"text": f"💤 Snoozed — rings at {until_str}", "callback_data": "noop"}
     ]])
     logger.info(f"Digest snooze stored: type={digest_type} | until={snooze_until.isoformat()}")
+
+
+async def _approve_correction(
+    query_id: str, chat_id, tg_msg_id: int, doc_id: str, db: firestore.Client
+) -> None:
+    """Mark a correction as confirmed."""
+    try:
+        ref = db.collection("aperture_corrections").document(doc_id)
+        doc = ref.get()
+        if not doc.exists:
+            await _answer(query_id, "Correction not found.")
+            return
+        ref.update({"confirmed": True, "confirmed_at": firestore.SERVER_TIMESTAMP})
+        data = doc.to_dict()
+        correct_cat = data.get("correct_category", "?")
+        correct_name = CATEGORY_NAMES.get(correct_cat, str(correct_cat))
+        await _answer(query_id, f"Approved!")
+        await _edit_keyboard(chat_id, tg_msg_id, [[
+            {"text": f"✓ Approved → Cat {correct_cat} ({correct_name})", "callback_data": "noop"}
+        ]])
+        logger.info(f"Correction approved: {doc_id} → cat={correct_cat}")
+    except Exception as exc:
+        logger.exception(f"Error approving correction {doc_id}: {exc}")
+        await _answer(query_id, "Something went wrong.")
 
 
 async def _restore_digest_snooze_button(chat_id, tg_msg_id: int, digest_type: str) -> None:

@@ -172,7 +172,7 @@ async def telegram_webhook(request: Request):
         chat_id = str(message.get("chat", {}).get("id", ""))
         text = message.get("text", "").strip()
         if chat_id == settings.telegram_chat_id and text:
-            await handle_message(text, db, telegram.send_text)
+            await handle_message(text, db, telegram)
 
     return {"ok": True}
 

@@ -76,6 +76,10 @@ class TelegramNotifier:
         """Send a plain HTML message (for summaries, reminders, etc.)."""
         await self._send_message(text)
 
+    async def send_with_keyboard(self, text: str, keyboard: list) -> None:
+        """Send an HTML message with an inline keyboard."""
+        await self._send_message(text, {"inline_keyboard": keyboard})
+
     async def send_digest_with_snooze(self, text: str, digest_type: str) -> None:
         """Send a digest message with a Snooze button. digest_type: 'morning' | 'evening'."""
         reply_markup = {
