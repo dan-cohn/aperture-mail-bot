@@ -184,7 +184,7 @@ class GeminiTriageClient(BaseTriage):
     def triage(self, sender: str, subject: str, snippet: str, date: str = "") -> TriageResult:
         user_msg = build_user_message(sender, subject, snippet, date)
 
-        # API call — raise TriageUnavailableError on retriable 503s
+        # API call — raise TriageUnavailableError on retriable 503/429 errors
         try:
             response = self._client.models.generate_content(
                 model=settings.gemini_model,
@@ -193,7 +193,7 @@ class GeminiTriageClient(BaseTriage):
             )
         except Exception as exc:
             exc_str = str(exc)
-            if "503" in exc_str or "UNAVAILABLE" in exc_str.upper():
+            if any(s in exc_str for s in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")):
                 logger.warning(f"Triage 503 for '{subject[:60]}': {exc}")
                 raise TriageUnavailableError(exc_str) from exc
             logger.error(f"Triage API error for '{subject[:60]}': {exc}")

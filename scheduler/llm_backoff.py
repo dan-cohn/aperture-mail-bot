@@ -51,9 +51,13 @@ class LLMBackoffManager:
             fc = self._failure_count
 
             if fc >= 3:
+                if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+                    error_label = "429 (rate limited)"
+                else:
+                    error_label = "503 (service unavailable)"
                 await self._telegram.send_text(
                     f"⚠️ <b>Aperture: LLM Unavailable</b>\n\n"
-                    f"Gemini returned 503 three times in a row.\n"
+                    f"Gemini returned {error_label} three times in a row.\n"
                     f"Error: <code>{exc_str[:300]}</code>\n\n"
                     f"Retrying in 5 minutes."
                 )
