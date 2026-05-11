@@ -141,6 +141,8 @@ echo "--- Syncing prompts to Firestore..."
 .venv/bin/python scripts/sync_prompt.py
 
 # ── Step 7: Deploy to Cloud Run ───────────────────────────────────────────────
+DASHBOARD_VM_CONTROL_URL=$(grep '^DASHBOARD_VM_CONTROL_URL=' .env 2>/dev/null | cut -d'=' -f2- | sed 's/#.*//' | xargs || echo "")
+
 echo "--- Deploying to Cloud Run..."
 gcloud run deploy "$SERVICE_NAME" \
   --image="$IMAGE:latest" \
@@ -153,7 +155,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory=512Mi \
   --cpu=1 \
   --timeout=120 \
-  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production,CLOUD_RUN_REGION=$REGION" \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production,CLOUD_RUN_REGION=$REGION,DASHBOARD_VM_CONTROL_URL=$DASHBOARD_VM_CONTROL_URL" \
   --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=aperture-TELEGRAM_WEBHOOK_SECRET:latest"
 
 # ── Step 8: Print the service URL ─────────────────────────────────────────────
@@ -217,15 +219,14 @@ gcloud run deploy aperture-dashboard \
   --platform=managed \
   --region="$REGION" \
   --project="$PROJECT_ID" \
-  --no-allow-unauthenticated \
+  --allow-unauthenticated \
   --min-instances=0 \
   --max-instances=1 \
   --memory=1Gi \
   --cpu=1 \
-  --no-cpu-throttling \
   --timeout=300 \
-  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,TIMEZONE=America/Chicago,CLOUDFLARE_TUNNEL_HOSTNAME=$(grep '^CLOUDFLARE_TUNNEL_HOSTNAME=' .env | cut -d'=' -f2-)" \
-  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,CLOUDFLARE_TUNNEL_TOKEN=aperture-CLOUDFLARE_TUNNEL_TOKEN:latest"
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,TIMEZONE=America/Chicago" \
+  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest"
 
 echo "--- Resetting dashboard Firestore state..."
 GCP_PROJECT_ID="$PROJECT_ID" FIRESTORE_DATABASE="aperture-db" \

@@ -561,16 +561,34 @@ def _cancel_stop_task(task_name: str) -> None:
         pass
 
 
+async def _call_vm_control(action: str) -> None:
+    """POST /{action} to the VM control server to start or stop cloudflared."""
+    url = settings.dashboard_vm_control_url
+    if not url:
+        logger.warning("DASHBOARD_VM_CONTROL_URL not configured — skipping VM control")
+        return
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{url.rstrip('/')}/{action}",
+            headers={"X-Aperture-Secret": settings.internal_secret},
+        )
+        resp.raise_for_status()
+
+
 async def _revert_dashboard(db: firestore.Client, telegram) -> None:
-    """Scale dashboard to 0, clear state, notify. Called by /internal/dashboard/stop."""
+    """Scale dashboard to 0, stop tunnel, clear state, notify. Called by /internal/dashboard/stop."""
     try:
-        await asyncio.to_thread(_set_dashboard_min_instances, 0)
+        await asyncio.gather(
+            asyncio.to_thread(_set_dashboard_min_instances, 0),
+            _call_vm_control("stop"),
+        )
     except Exception as exc:
         logger.error(f"Dashboard revert failed: {exc}")
     db.collection("aperture_config").document("dashboard_state").set(
         {"active": False, "expires_at": None, "task_name": ""}
     )
-    await telegram.send_text("🖥️ Dashboard scaled down — 1-hour window expired.")
+    await telegram.send_text("🖥️ Dashboard shut down — 1-hour window expired.")
 
 
 async def _cmd_dashboard_start(db: firestore.Client, telegram) -> None:
@@ -584,7 +602,10 @@ async def _cmd_dashboard_start(db: firestore.Client, telegram) -> None:
     old_task = state.get("task_name", "")
 
     try:
-        await asyncio.to_thread(_set_dashboard_min_instances, 1)
+        await asyncio.gather(
+            asyncio.to_thread(_set_dashboard_min_instances, 1),
+            _call_vm_control("start"),
+        )
     except Exception as exc:
         logger.error(f"Failed to start dashboard: {exc}")
         await telegram.send_text(f"Failed to start dashboard: {exc}")
@@ -614,7 +635,10 @@ async def _cmd_dashboard_stop(db: firestore.Client, telegram) -> None:
     old_task = doc.to_dict().get("task_name", "") if doc.exists else ""
 
     try:
-        await asyncio.to_thread(_set_dashboard_min_instances, 0)
+        await asyncio.gather(
+            asyncio.to_thread(_set_dashboard_min_instances, 0),
+            _call_vm_control("stop"),
+        )
     except Exception as exc:
         logger.error(f"Failed to stop dashboard: {exc}")
         await telegram.send_text(f"Failed to stop dashboard: {exc}")

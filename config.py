@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     cloud_run_url: str = ""  # e.g. https://aperture-xxxx-uc.a.run.app
     cloud_run_region: str = "us-central1"
 
+    # Dashboard VM control server
+    dashboard_vm_control_url: str = ""  # e.g. http://1.2.3.4:9090
+
     # Internal endpoint security
     internal_secret: str = ""  # set via INTERNAL_SECRET in .env
 
