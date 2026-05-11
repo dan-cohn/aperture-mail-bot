@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # Cloud Run (set after first deployment)
     cloud_run_url: str = ""  # e.g. https://aperture-xxxx-uc.a.run.app
+    cloud_run_region: str = "us-central1"
 
     # Internal endpoint security
     internal_secret: str = ""  # set via INTERNAL_SECRET in .env

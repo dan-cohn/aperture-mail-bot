@@ -11,6 +11,8 @@ google-api-python-client>=2.127.0
 google-cloud-firestore>=2.16.0
 google-cloud-pubsub>=2.21.0
 google-cloud-monitoring>=2.20.0
+google-cloud-run>=0.10.0
+google-cloud-tasks>=2.16.0
 
 # LLM
 google-genai>=1.0.0

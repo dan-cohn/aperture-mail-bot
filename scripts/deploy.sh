@@ -113,6 +113,20 @@ if [ "$QUICK" = false ]; then
     --member="serviceAccount:$SA" \
     --role="roles/datastore.user" --quiet
 
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA" \
+    --role="roles/run.developer" --quiet
+
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA" \
+    --role="roles/cloudtasks.enqueuer" --quiet
+
+  echo "--- Creating Cloud Tasks queue (if not exists)..."
+  gcloud tasks queues describe aperture-tasks \
+    --location="$REGION" --project="$PROJECT_ID" &>/dev/null || \
+  gcloud tasks queues create aperture-tasks \
+    --location="$REGION" --project="$PROJECT_ID"
+
   for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN; do
     gcloud secrets add-iam-policy-binding "aperture-$secret" \
       --member="serviceAccount:$SA" \
@@ -138,13 +152,20 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory=512Mi \
   --cpu=1 \
   --timeout=120 \
-  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production" \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production,CLOUD_RUN_REGION=$REGION" \
   --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=aperture-TELEGRAM_WEBHOOK_SECRET:latest"
 
 # ── Step 8: Print the service URL ─────────────────────────────────────────────
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
   --region="$REGION" --project="$PROJECT_ID" \
   --format="value(status.url)")
+
+# ── Step 8b: Inject service URL into aperture env ────────────────────────────
+echo "--- Injecting service URL into Cloud Run env..."
+gcloud run services update "$SERVICE_NAME" \
+  --region="$REGION" --project="$PROJECT_ID" \
+  --update-env-vars="CLOUD_RUN_URL=$SERVICE_URL" \
+  --quiet
 
 # ── Step 9: Register Telegram webhook ────────────────────────────────────────
 echo "--- Registering Telegram webhook..."

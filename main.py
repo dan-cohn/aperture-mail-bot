@@ -265,3 +265,16 @@ async def trigger_process_snoozes():
     """Re-fire alerts for expired snoozes. Triggered every 15 minutes."""
     count = await process_snoozes(db, telegram)
     return {"fired": count}
+
+
+@app.post(
+    "/internal/dashboard/stop",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_dashboard_stop():
+    """Scale aperture-dashboard to min-instances=0. Called by Cloud Tasks after 1h."""
+    from notifications.telegram_commands import _revert_dashboard
+    await _revert_dashboard(db, telegram)
+    return {"ok": True}

@@ -15,16 +15,22 @@ Supported actions (extensible — add new handlers below):
   modify_prompt      — generatively add/update a rule in the learned prompt
   query_stats        — show triage statistics for a time period
   health_status      — show system health and queue depths
+  dashboard_start    — start the dashboard for 1 hour (or reset the timer if already running)
+  dashboard_stop     — stop the dashboard immediately
+  dashboard_status   — check if the dashboard is running and time remaining
 """
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from google import genai
-from google.cloud import firestore
+from google.cloud import firestore, run_v2, tasks_v2
 from google.cloud.firestore_v1 import FieldFilter
 from google.genai import types
+from google.protobuf import field_mask_pb2
 
 from config import settings
 from triage.schemas import CATEGORY_NAMES
@@ -58,6 +64,9 @@ Actions:
   modify_prompt      add or change a rule in the learned prompt
   query_stats        show triage statistics (count by action/category)
   health_status      show queue depths and system health
+  dashboard_start    start the dashboard for 1 hour (resets timer if already running)
+  dashboard_stop     stop the dashboard immediately
+  dashboard_status   check whether the dashboard is running and how long it has left
   unknown            couldn't understand the request
 
 Examples:
@@ -73,6 +82,12 @@ Examples:
     → {"action":"query_history","query":"apple.com","reply":"Searching triage history."}
   "help"
     → {"action":"help","reply":"Here's what I can do."}
+  "start the dashboard"
+    → {"action":"dashboard_start","reply":"Starting the dashboard."}
+  "stop the dashboard"
+    → {"action":"dashboard_stop","reply":"Stopping the dashboard."}
+  "is the dashboard running?"
+    → {"action":"dashboard_status","reply":"Checking dashboard status."}
 """
 
 _HELP_TEXT = """\
@@ -96,6 +111,11 @@ _HELP_TEXT = """\
   • "what happened to emails from nytimes.com?"
   • "show stats for this week"
   • "stats today"
+
+<b>Dashboard</b>
+  • "start dashboard" — runs for 1 hour, then auto-stops
+  • "stop dashboard"
+  • "dashboard status"
 
 <b>System</b>
   • "system status" / "health"
@@ -159,6 +179,15 @@ async def handle_message(text: str, db: firestore.Client, telegram) -> None:
 
     elif action == "health_status":
         await _cmd_health_status(db, telegram)
+
+    elif action == "dashboard_start":
+        await _cmd_dashboard_start(db, telegram)
+
+    elif action == "dashboard_stop":
+        await _cmd_dashboard_stop(db, telegram)
+
+    elif action == "dashboard_status":
+        await _cmd_dashboard_status(db, telegram)
 
     else:
         await telegram.send_text(
@@ -461,6 +490,159 @@ async def _cmd_health_status(db, telegram) -> None:
         f"  📬 Processed today: {today_count} emails",
     ]
     await telegram.send_text("\n".join(lines))
+
+
+# ── Dashboard control ─────────────────────────────────────────────────────────
+
+_DASHBOARD_SERVICE = "aperture-dashboard"
+_TASKS_QUEUE_ID = "aperture-tasks"
+_STOP_TASK_PREFIX = "dashboard-stop"
+
+
+def _dashboard_service_path() -> str:
+    return (
+        f"projects/{settings.gcp_project_id}/locations/{settings.cloud_run_region}"
+        f"/services/{_DASHBOARD_SERVICE}"
+    )
+
+
+def _tasks_queue_path() -> str:
+    return (
+        f"projects/{settings.gcp_project_id}/locations/{settings.cloud_run_region}"
+        f"/queues/{_TASKS_QUEUE_ID}"
+    )
+
+
+def _set_dashboard_min_instances(n: int) -> None:
+    client = run_v2.ServicesClient()
+    service = run_v2.Service(
+        name=_dashboard_service_path(),
+        scaling=run_v2.ServiceScaling(min_instance_count=n),
+    )
+    mask = field_mask_pb2.FieldMask(paths=["scaling"])
+    client.update_service(service=service, update_mask=mask)
+
+
+def _schedule_stop_task(old_task_name: str = "") -> str:
+    """Cancel old_task_name if present, create a new stop task 1h from now. Returns new task name."""
+    client = tasks_v2.CloudTasksClient()
+    queue = _tasks_queue_path()
+
+    if old_task_name:
+        try:
+            client.delete_task(name=old_task_name)
+        except Exception:
+            pass
+
+    schedule_time = datetime.now(timezone.utc) + timedelta(hours=1)
+    task_id = f"{_STOP_TASK_PREFIX}-{int(time.time())}"
+    task_name = f"{queue}/tasks/{task_id}"
+    client.create_task(
+        parent=queue,
+        task=tasks_v2.Task(
+            name=task_name,
+            schedule_time=schedule_time,
+            http_request=tasks_v2.HttpRequest(
+                http_method=tasks_v2.HttpMethod.POST,
+                url=f"{settings.cloud_run_url}/internal/dashboard/stop",
+                headers={"X-Aperture-Secret": settings.internal_secret},
+            ),
+        ),
+    )
+    return task_name
+
+
+def _cancel_stop_task(task_name: str) -> None:
+    if not task_name:
+        return
+    try:
+        tasks_v2.CloudTasksClient().delete_task(name=task_name)
+    except Exception:
+        pass
+
+
+async def _revert_dashboard(db: firestore.Client, telegram) -> None:
+    """Scale dashboard to 0, clear state, notify. Called by /internal/dashboard/stop."""
+    try:
+        await asyncio.to_thread(_set_dashboard_min_instances, 0)
+    except Exception as exc:
+        logger.error(f"Dashboard revert failed: {exc}")
+    db.collection("aperture_config").document("dashboard_state").set(
+        {"active": False, "expires_at": None, "task_name": ""}
+    )
+    await telegram.send_text("🖥️ Dashboard scaled down — 1-hour window expired.")
+
+
+async def _cmd_dashboard_start(db: firestore.Client, telegram) -> None:
+    if not settings.cloud_run_url:
+        await telegram.send_text("Dashboard control unavailable — CLOUD_RUN_URL not configured.")
+        return
+
+    doc = db.collection("aperture_config").document("dashboard_state").get()
+    state = doc.to_dict() if doc.exists else {}
+    was_running = state.get("active", False)
+    old_task = state.get("task_name", "")
+
+    try:
+        await asyncio.to_thread(_set_dashboard_min_instances, 1)
+    except Exception as exc:
+        logger.error(f"Failed to start dashboard: {exc}")
+        await telegram.send_text(f"Failed to start dashboard: {exc}")
+        return
+
+    task_name = await asyncio.to_thread(_schedule_stop_task, old_task)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.collection("aperture_config").document("dashboard_state").set({
+        "active": True,
+        "expires_at": expires_at,
+        "task_name": task_name,
+    })
+
+    tz = ZoneInfo(settings.timezone)
+    until_str = expires_at.astimezone(tz).strftime("%-I:%M %p %Z")
+    if was_running:
+        await telegram.send_text(f"🖥️ Dashboard timer reset — auto-stops at {until_str}.")
+    else:
+        await telegram.send_text(
+            f"🖥️ Dashboard starting up — auto-stops at {until_str}.\n"
+            f"(Allow ~20s for the instance to warm up.)"
+        )
+
+
+async def _cmd_dashboard_stop(db: firestore.Client, telegram) -> None:
+    doc = db.collection("aperture_config").document("dashboard_state").get()
+    old_task = doc.to_dict().get("task_name", "") if doc.exists else ""
+
+    try:
+        await asyncio.to_thread(_set_dashboard_min_instances, 0)
+    except Exception as exc:
+        logger.error(f"Failed to stop dashboard: {exc}")
+        await telegram.send_text(f"Failed to stop dashboard: {exc}")
+        return
+
+    await asyncio.to_thread(_cancel_stop_task, old_task)
+    db.collection("aperture_config").document("dashboard_state").set(
+        {"active": False, "expires_at": None, "task_name": ""}
+    )
+    await telegram.send_text("🖥️ Dashboard stopping — will scale to zero when idle.")
+
+
+async def _cmd_dashboard_status(db: firestore.Client, telegram) -> None:
+    doc = db.collection("aperture_config").document("dashboard_state").get()
+    if not doc.exists or not doc.to_dict().get("active", False):
+        await telegram.send_text("🖥️ Dashboard is <b>stopped</b> (min-instances=0).")
+        return
+
+    expires_at = doc.to_dict().get("expires_at")
+    if expires_at:
+        tz = ZoneInfo(settings.timezone)
+        until_str = expires_at.astimezone(tz).strftime("%-I:%M %p %Z")
+        mins = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds() / 60))
+        await telegram.send_text(
+            f"🖥️ Dashboard is <b>running</b> — auto-stops at {until_str} ({mins} min remaining)."
+        )
+    else:
+        await telegram.send_text("🖥️ Dashboard is <b>running</b>.")
 
 
 # ── Allowlist CRUD (also used by executor) ────────────────────────────────────
