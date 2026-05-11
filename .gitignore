@@ -34,6 +34,9 @@ Thumbs.db
 # Streamlit
 .streamlit/secrets.toml
 
+# oh-my-claude
+.omc/
+
 # Other
 .*~
 *~
