@@ -217,7 +217,7 @@ gcloud run deploy aperture-dashboard \
   --region="$REGION" \
   --project="$PROJECT_ID" \
   --no-allow-unauthenticated \
-  --min-instances=1 \
+  --min-instances=0 \
   --max-instances=1 \
   --memory=1Gi \
   --cpu=1 \
@@ -225,6 +225,16 @@ gcloud run deploy aperture-dashboard \
   --timeout=300 \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,TIMEZONE=America/Chicago,CLOUDFLARE_TUNNEL_HOSTNAME=$(grep '^CLOUDFLARE_TUNNEL_HOSTNAME=' .env | cut -d'=' -f2-)" \
   --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,CLOUDFLARE_TUNNEL_TOKEN=aperture-CLOUDFLARE_TUNNEL_TOKEN:latest"
+
+echo "--- Resetting dashboard Firestore state..."
+GCP_PROJECT_ID="$PROJECT_ID" FIRESTORE_DATABASE="aperture-db" \
+  .venv/bin/python -c "
+import os
+from google.cloud import firestore
+db = firestore.Client(project=os.environ['GCP_PROJECT_ID'], database=os.environ['FIRESTORE_DATABASE'])
+db.collection('aperture_config').document('dashboard_state').set({'active': False, 'expires_at': None, 'task_name': ''})
+print('  dashboard_state reset to inactive')
+"
 fi  # end skip-dashboard check
 
 if [ "$QUICK" = false ]; then
