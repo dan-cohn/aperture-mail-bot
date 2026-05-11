@@ -41,6 +41,8 @@ cat > /etc/cloudflared/config.yml << EOF
 ingress:
   - hostname: ${TUNNEL_HOSTNAME}
     service: ${DASHBOARD_URL}
+    originRequest:
+      httpHostHeader: $(echo "$DASHBOARD_URL" | sed 's|https://||')
   - service: http_status:404
 EOF
 
