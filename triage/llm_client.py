@@ -30,6 +30,11 @@ from triage.schemas import CATEGORY_NAMES, TriageResult
 
 logger = logging.getLogger(__name__)
 
+
+class TriageUnavailableError(Exception):
+    """Raised when the LLM API returns a retriable error (e.g. 503 UNAVAILABLE)."""
+
+
 _FALLBACK = TriageResult(
     category=9,
     is_urgent=False,
@@ -178,13 +183,24 @@ class GeminiTriageClient(BaseTriage):
 
     def triage(self, sender: str, subject: str, snippet: str, date: str = "") -> TriageResult:
         user_msg = build_user_message(sender, subject, snippet, date)
-        response = None
+
+        # API call — raise TriageUnavailableError on retriable 503s
         try:
             response = self._client.models.generate_content(
                 model=settings.gemini_model,
                 contents=user_msg,
                 config=self._get_config(),
             )
+        except Exception as exc:
+            exc_str = str(exc)
+            if "503" in exc_str or "UNAVAILABLE" in exc_str.upper():
+                logger.warning(f"Triage 503 for '{subject[:60]}': {exc}")
+                raise TriageUnavailableError(exc_str) from exc
+            logger.error(f"Triage API error for '{subject[:60]}': {exc}")
+            return _FALLBACK
+
+        # Parse response
+        try:
             data = json.loads(response.text)
             result = TriageResult(**data)
             logger.info(
@@ -192,9 +208,9 @@ class GeminiTriageClient(BaseTriage):
                 f"action={result.action} | subject='{subject[:60]}'"
             )
             return result
-        except (json.JSONDecodeError, ValidationError, Exception) as exc:
+        except (json.JSONDecodeError, ValidationError) as exc:
             logger.error(
-                f"Triage failed for '{subject[:60]}': {exc}\n"
+                f"Triage parse error for '{subject[:60]}': {exc}\n"
                 f"Raw LLM output: {getattr(response, 'text', 'N/A')}"
             )
             return _FALLBACK

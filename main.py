@@ -19,9 +19,10 @@ from notifications.telegram import TelegramNotifier
 from notifications.telegram_commands import handle_message
 from notifications.telegram_webhook import handle_callback
 from scheduler.digest import send_archive_digest, send_digest
+from scheduler.llm_backoff import LLMBackoffManager
 from scheduler.snooze import process_snoozes
 from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
-from triage.llm_client import get_triage_client
+from triage.llm_client import TriageUnavailableError, get_triage_client
 
 logging.basicConfig(
     level=settings.log_level,
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 db: firestore.Client | None = None
 telegram: TelegramNotifier | None = None
 triage_client = None
+backoff_manager = LLMBackoffManager()
 
 
 @asynccontextmanager
@@ -44,7 +46,8 @@ async def lifespan(app: FastAPI):
         database=settings.firestore_database,
     )
     telegram = TelegramNotifier()
-    triage_client = get_triage_client(db=db)   # pass db for dynamic corrections
+    triage_client = get_triage_client(db=db)
+    backoff_manager.configure(telegram=telegram, process_fn=_process_message)
     logger.info(
         f"Ready | project={settings.gcp_project_id} "
         f"| db={settings.firestore_database} "
@@ -52,6 +55,27 @@ async def lifespan(app: FastAPI):
     )
     yield
     logger.info("Aperture shutting down.")
+
+
+async def _process_message(msg: dict) -> None:
+    """Triage and execute a single message. Raises TriageUnavailableError on LLM 503."""
+    gmail_service = build_gmail_service(db)
+    triage_result = triage_client.triage(
+        sender=msg["sender"],
+        subject=msg["subject"],
+        snippet=msg["snippet"],
+        date=msg["date"],
+    )
+    await execute(
+        triage=triage_result,
+        message_id=msg["id"],
+        thread_id=msg["thread_id"],
+        sender=msg["sender"],
+        subject=msg["subject"],
+        gmail_service=gmail_service,
+        db=db,
+        telegram=telegram,
+    )
 
 
 app = FastAPI(
@@ -110,8 +134,7 @@ async def gmail_webhook(request: Request):
         return
 
     try:
-        gmail_service = build_gmail_service(db)
-        messages = process_notification(history_id, db, gmail_service)
+        messages = process_notification(history_id, db, build_gmail_service(db))
     except Exception as exc:
         logger.exception(f"Failed to fetch messages for historyId={history_id}: {exc}")
         return
@@ -122,23 +145,14 @@ async def gmail_webhook(request: Request):
     logger.info(f"Triaging {len(messages)} new message(s)…")
 
     for msg in messages:
+        if backoff_manager.is_blocked():
+            backoff_manager.enqueue(msg)
+            continue
         try:
-            triage_result = triage_client.triage(
-                sender=msg["sender"],
-                subject=msg["subject"],
-                snippet=msg["snippet"],
-                date=msg["date"],
-            )
-            await execute(
-                triage=triage_result,
-                message_id=msg["id"],
-                thread_id=msg["thread_id"],
-                sender=msg["sender"],
-                subject=msg["subject"],
-                gmail_service=gmail_service,
-                db=db,
-                telegram=telegram,
-            )
+            await _process_message(msg)
+        except TriageUnavailableError as exc:
+            backoff_manager.enqueue(msg)
+            await backoff_manager.on_failure(str(exc))
         except Exception as exc:
             logger.exception(
                 f"Error processing message {msg.get('id')} "
