@@ -45,6 +45,7 @@ if [ "$QUICK" = false ]; then
   gcloud services enable \
     artifactregistry.googleapis.com \
     secretmanager.googleapis.com \
+    cloudtasks.googleapis.com \
     --project="$PROJECT_ID"
 
   # ── Step 2: Create Artifact Registry repo (idempotent) ───────────────────────
