@@ -31,8 +31,8 @@ class Handler(BaseHTTPRequestHandler):
             subprocess.run(["systemctl", "start", "cloudflared"], check=False)
             self._reply(200, b"started")
         elif self.path == "/stop":
-            subprocess.run(["systemctl", "stop", "cloudflared"], check=False)
-            self._reply(200, b"stopped")
+            subprocess.Popen(["systemctl", "stop", "cloudflared"])
+            self._reply(200, b"stopping")
         else:
             self._reply(404, b"not found")
 
