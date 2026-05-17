@@ -88,6 +88,20 @@ if [ "$QUICK" = false ]; then
     fi
   }
 
+  cleanup_secret_versions() {
+    local name="$1"
+    gcloud secrets versions list "$name" \
+      --project="$PROJECT_ID" \
+      --filter="state:ENABLED OR state:DISABLED" \
+      --sort-by="~createTime" \
+      --format="value(name)" \
+      | tail -n +2 \
+      | while read -r ver; do
+          gcloud secrets versions destroy "$ver" \
+            --secret="$name" --project="$PROJECT_ID" --quiet 2>/dev/null || true
+        done
+  }
+
   # Load .env (skip comments and blank lines)
   if [ -f .env ]; then
     while IFS='=' read -r key value; do
@@ -104,6 +118,12 @@ if [ "$QUICK" = false ]; then
   else
     echo "WARNING: .env not found — skipping secret sync"
   fi
+
+  echo "--- Cleaning up old secret versions..."
+  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN; do
+    cleanup_secret_versions "aperture-$secret"
+    echo "  ✓ aperture-$secret"
+  done
 
   # ── Step 6: Grant Cloud Run SA access to secrets + Firestore ─────────────────
   echo "--- Granting service account permissions..."
