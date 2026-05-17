@@ -568,7 +568,7 @@ async def _call_vm_control(action: str) -> None:
         logger.warning("DASHBOARD_VM_CONTROL_URL not configured — skipping VM control")
         return
     import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=10.0) as client:
+    async with _httpx.AsyncClient(timeout=_httpx.Timeout(5.0, read=30.0)) as client:
         resp = await client.post(
             f"{url.rstrip('/')}/{action}",
             headers={"X-Aperture-Secret": settings.internal_secret},
