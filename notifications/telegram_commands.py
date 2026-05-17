@@ -200,7 +200,7 @@ async def handle_message(text: str, db: firestore.Client, telegram) -> None:
 async def _cmd_allowlist_sender(data: dict, db, telegram, reply_text: str) -> None:
     emails = data.get("emails") or []
     if not emails:
-        single = data.get("email", "").strip().lower()
+        single = data.get("email", "").strip().lower().lstrip("@")
         if single:
             emails = [single]
     if not emails:
@@ -208,7 +208,7 @@ async def _cmd_allowlist_sender(data: dict, db, telegram, reply_text: str) -> No
         return
     added, skipped = [], []
     for e in emails:
-        e = e.strip().lower()
+        e = e.strip().lower().lstrip("@")
         if e:
             already = _upsert_allowlist(db, e)
             (skipped if already else added).append(e)
@@ -221,7 +221,7 @@ async def _cmd_allowlist_sender(data: dict, db, telegram, reply_text: str) -> No
 
 
 async def _cmd_remove_allowlist(data: dict, db, telegram) -> None:
-    email = data.get("email", "").strip().lower()
+    email = data.get("email", "").strip().lower().lstrip("@")
     if not email:
         await telegram.send_text("I couldn't find an email address or domain to remove.")
         return
@@ -690,15 +690,16 @@ def _upsert_allowlist(db: firestore.Client, email: str) -> bool:
 
 def _remove_from_allowlist(db: firestore.Client, email: str) -> bool:
     """Remove email/domain from allowlist. Returns True if it existed."""
-    docs = list(
-        db.collection("aperture_sender_allowlist")
-        .where(filter=FieldFilter("email", "==", email))
-        .limit(1)
-        .stream()
-    )
-    for doc in docs:
-        doc.reference.delete()
-        return True
+    for candidate in [email, "@" + email]:
+        docs = list(
+            db.collection("aperture_sender_allowlist")
+            .where(filter=FieldFilter("email", "==", candidate))
+            .limit(1)
+            .stream()
+        )
+        for doc in docs:
+            doc.reference.delete()
+            return True
     return False
 
 
