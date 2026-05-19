@@ -127,20 +127,32 @@ async def handle_message(text: str, db: firestore.Client, telegram) -> None:
     """Parse a freeform Telegram message and execute the inferred command."""
     client = genai.Client(api_key=settings.gemini_api_key)
 
-    try:
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=text,
-            config=types.GenerateContentConfig(
-                system_instruction=_INTENT_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-        data = json.loads(response.text)
-    except Exception as exc:
-        logger.error(f"Command parsing failed: {exc}")
-        await telegram.send_text("Sorry, I couldn't process that request.")
+    data = None
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model=settings.gemini_model,
+                contents=text,
+                config=types.GenerateContentConfig(
+                    system_instruction=_INTENT_PROMPT,
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                ),
+            )
+            data = json.loads(response.text)
+            break
+        except Exception as exc:
+            exc_str = str(exc)
+            retriable = any(s in exc_str for s in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+            if retriable and attempt < 2:
+                logger.warning(f"Command parse attempt {attempt + 1} failed, retrying: {exc_str[:100]}")
+                await asyncio.sleep(3)
+            else:
+                logger.error(f"Command parsing failed: {exc}")
+                await telegram.send_text("Gemini is temporarily unavailable — please try again in a moment.")
+                return
+
+    if data is None:
         return
 
     action = data.get("action", "unknown")
