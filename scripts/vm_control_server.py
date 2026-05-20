@@ -28,8 +28,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         if self.path == "/start":
-            subprocess.run(["systemctl", "start", "cloudflared"], check=False)
-            self._reply(200, b"started")
+            subprocess.Popen(["systemctl", "start", "cloudflared"])
+            self._reply(200, b"starting")
         elif self.path == "/stop":
             subprocess.Popen(["systemctl", "stop", "cloudflared"])
             self._reply(200, b"stopping")

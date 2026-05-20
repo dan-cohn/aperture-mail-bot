@@ -580,12 +580,22 @@ async def _call_vm_control(action: str) -> None:
         logger.warning("DASHBOARD_VM_CONTROL_URL not configured — skipping VM control")
         return
     import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=_httpx.Timeout(5.0, read=30.0)) as client:
-        resp = await client.post(
-            f"{url.rstrip('/')}/{action}",
-            headers={"X-Aperture-Secret": settings.internal_secret},
-        )
-        resp.raise_for_status()
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with _httpx.AsyncClient(timeout=_httpx.Timeout(5.0, read=30.0)) as client:
+                resp = await client.post(
+                    f"{url.rstrip('/')}/{action}",
+                    headers={"X-Aperture-Secret": settings.internal_secret},
+                )
+                resp.raise_for_status()
+                return
+        except (_httpx.ConnectTimeout, _httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt < 2:
+                logger.warning(f"VM control connect attempt {attempt + 1} failed, retrying: {exc}")
+                await asyncio.sleep(2)
+    raise last_exc
 
 
 async def _revert_dashboard(db: firestore.Client, telegram) -> None:
