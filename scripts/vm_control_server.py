@@ -17,13 +17,15 @@ Environment:
 """
 import os
 import subprocess
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SECRET = os.environ["INTERNAL_SECRET"]
 PORT = int(os.environ.get("CONTROL_PORT", "9090"))
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Drop connections that don't send a request within 10 s (scanner mitigation)
+    timeout = 10
     def do_POST(self):
         if not self._authorized():
             return
@@ -66,4 +68,4 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Aperture control server listening on port {PORT}", flush=True)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
