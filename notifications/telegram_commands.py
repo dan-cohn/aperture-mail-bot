@@ -159,52 +159,56 @@ async def handle_message(text: str, db: firestore.Client, telegram) -> None:
     reply_text = data.get("reply", "Done.")
     logger.info(f"Command: action={action} | input='{text[:60]}'")
 
-    if action == "allowlist_sender":
-        await _cmd_allowlist_sender(data, db, telegram, reply_text)
+    try:
+        if action == "allowlist_sender":
+            await _cmd_allowlist_sender(data, db, telegram, reply_text)
 
-    elif action == "remove_allowlist":
-        await _cmd_remove_allowlist(data, db, telegram)
+        elif action == "remove_allowlist":
+            await _cmd_remove_allowlist(data, db, telegram)
 
-    elif action == "list_allowlist":
-        await _cmd_list_allowlist(db, telegram)
+        elif action == "list_allowlist":
+            await _cmd_list_allowlist(db, telegram)
 
-    elif action == "help":
-        await telegram.send_text(_HELP_TEXT)
+        elif action == "help":
+            await telegram.send_text(_HELP_TEXT)
 
-    elif action == "query_history":
-        await _cmd_query_history(data, db, telegram)
+        elif action == "query_history":
+            await _cmd_query_history(data, db, telegram)
 
-    elif action == "add_correction":
-        await _cmd_add_correction(data, db, telegram, reply_text)
+        elif action == "add_correction":
+            await _cmd_add_correction(data, db, telegram, reply_text)
 
-    elif action == "list_corrections":
-        await _cmd_list_corrections(db, telegram)
+        elif action == "list_corrections":
+            await _cmd_list_corrections(db, telegram)
 
-    elif action == "view_prompt":
-        await _cmd_view_prompt(db, telegram)
+        elif action == "view_prompt":
+            await _cmd_view_prompt(db, telegram)
 
-    elif action == "modify_prompt":
-        await _cmd_modify_prompt(data, db, telegram, client)
+        elif action == "modify_prompt":
+            await _cmd_modify_prompt(data, db, telegram, client)
 
-    elif action == "query_stats":
-        await _cmd_query_stats(data, db, telegram)
+        elif action == "query_stats":
+            await _cmd_query_stats(data, db, telegram)
 
-    elif action == "health_status":
-        await _cmd_health_status(db, telegram)
+        elif action == "health_status":
+            await _cmd_health_status(db, telegram)
 
-    elif action == "dashboard_start":
-        await _cmd_dashboard_start(db, telegram)
+        elif action == "dashboard_start":
+            await _cmd_dashboard_start(db, telegram)
 
-    elif action == "dashboard_stop":
-        await _cmd_dashboard_stop(db, telegram)
+        elif action == "dashboard_stop":
+            await _cmd_dashboard_stop(db, telegram)
 
-    elif action == "dashboard_status":
-        await _cmd_dashboard_status(db, telegram)
+        elif action == "dashboard_status":
+            await _cmd_dashboard_status(db, telegram)
 
-    else:
-        await telegram.send_text(
-            "I didn't understand that. Send <b>help</b> for a list of available commands."
-        )
+        else:
+            await telegram.send_text(
+                "I didn't understand that. Send <b>help</b> for a list of available commands."
+            )
+    except Exception as exc:
+        logger.exception(f"Unhandled error in command handler (action={action}): {exc}")
+        await telegram.send_text("Something went wrong processing your request — please try again.")
 
 
 # ── Command handlers ──────────────────────────────────────────────────────────
