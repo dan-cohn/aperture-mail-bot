@@ -110,7 +110,7 @@ if [ "$QUICK" = false ]; then
       value="${value%%#*}"
       value="${value%"${value##*[![:space:]]}"}"  # rtrim
       case "$key" in
-        TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET|CLOUDFLARE_TUNNEL_TOKEN)
+        TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|GEMINI_API_KEY|INTERNAL_SECRET|TELEGRAM_WEBHOOK_SECRET|CLOUDFLARE_TUNNEL_TOKEN|MATTER_API_KEY)
           push_secret "aperture-$key" "$value"
           ;;
       esac
@@ -120,7 +120,7 @@ if [ "$QUICK" = false ]; then
   fi
 
   echo "--- Cleaning up old secret versions..."
-  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN; do
+  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN MATTER_API_KEY; do
     cleanup_secret_versions "aperture-$secret"
     echo "  ✓ aperture-$secret"
   done
@@ -148,7 +148,7 @@ if [ "$QUICK" = false ]; then
   gcloud tasks queues create aperture-tasks \
     --location="$REGION" --project="$PROJECT_ID"
 
-  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN; do
+  for secret in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GEMINI_API_KEY INTERNAL_SECRET TELEGRAM_WEBHOOK_SECRET CLOUDFLARE_TUNNEL_TOKEN MATTER_API_KEY; do
     gcloud secrets add-iam-policy-binding "aperture-$secret" \
       --member="serviceAccount:$SA" \
       --role="roles/secretmanager.secretAccessor" \
@@ -202,7 +202,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --cpu=1 \
   --timeout=120 \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production,CLOUD_RUN_REGION=$REGION,DASHBOARD_VM_CONTROL_URL=$DASHBOARD_VM_CONTROL_URL" \
-  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=aperture-TELEGRAM_WEBHOOK_SECRET:latest"
+  --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=aperture-TELEGRAM_WEBHOOK_SECRET:latest,MATTER_API_KEY=aperture-MATTER_API_KEY:latest"
 
 # ── Step 8: Print the service URL ─────────────────────────────────────────────
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
@@ -318,8 +318,9 @@ if [ "$QUICK" = false ]; then
     echo "  ✓ $job_name ($schedule)"
   }
 
-  upsert_scheduler_job "aperture-digest-morning" "30 7 * * *"  "$SERVICE_URL/internal/digest/morning" "Morning archive digest"
-  upsert_scheduler_job "aperture-digest-evening" "30 17 * * *" "$SERVICE_URL/internal/digest/evening" "Evening inbox digest"
+  upsert_scheduler_job "aperture-digest-morning"  "30 7 * * *"  "$SERVICE_URL/internal/digest/morning"   "Morning archive digest"
+  upsert_scheduler_job "aperture-digest-evening"  "30 17 * * *" "$SERVICE_URL/internal/digest/evening"   "Evening inbox digest"
+  upsert_scheduler_job "aperture-matter-reminder" "0 20 * * *"  "$SERVICE_URL/internal/matter-reminder"  "Matter reading queue reminder"
 fi
 
 echo ""

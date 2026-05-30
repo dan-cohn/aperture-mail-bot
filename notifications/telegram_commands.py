@@ -19,6 +19,7 @@ Supported actions (extensible — add new handlers below):
   dashboard_start    — start the dashboard for 1 hour (or reset the timer if already running)
   dashboard_stop     — stop the dashboard immediately
   dashboard_status   — check if the dashboard is running and time remaining
+  matter_status      — show Matter reading queue stats and recent articles
 """
 import asyncio
 import json
@@ -69,6 +70,7 @@ Actions:
   dashboard_start    start the dashboard for 1 hour (resets timer if already running)
   dashboard_stop     stop the dashboard immediately
   dashboard_status   check whether the dashboard is running and how long it has left
+  matter_status      show Matter reading queue size, recent articles, and reading time
   unknown            couldn't understand the request
 
 Examples:
@@ -92,6 +94,8 @@ Examples:
     → {"action":"dashboard_status","reply":"Checking dashboard status."}
   "approve all corrections"
     → {"action":"approve_all_corrections","reply":"Approving all pending corrections."}
+  "what's in my reading queue?" / "matter status"
+    → {"action":"matter_status","reply":"Fetching your Matter queue."}
 """
 
 _HELP_TEXT = """\
@@ -121,6 +125,9 @@ _HELP_TEXT = """\
   • "start dashboard" — runs for 1 hour, then auto-stops
   • "stop dashboard"
   • "dashboard status"
+
+<b>Matter</b>
+  • "matter status" / "reading queue"
 
 <b>System</b>
   • "system status" / "health"
@@ -209,6 +216,9 @@ async def handle_message(text: str, db: firestore.Client, telegram) -> None:
 
         elif action == "dashboard_status":
             await _cmd_dashboard_status(db, telegram)
+
+        elif action == "matter_status":
+            await _cmd_matter_status(telegram)
 
         else:
             await telegram.send_text(
@@ -724,6 +734,17 @@ async def _cmd_dashboard_status(db: firestore.Client, telegram) -> None:
         )
     else:
         await telegram.send_text("🖥️ Dashboard is <b>running</b>.")
+
+
+# ── Matter ────────────────────────────────────────────────────────────────────
+
+async def _cmd_matter_status(telegram) -> None:
+    if not settings.matter_api_key:
+        await telegram.send_text("MATTER_API_KEY is not configured.")
+        return
+    from scheduler.matter_reminder import get_matter_status
+    message = await get_matter_status()
+    await telegram.send_text(message)
 
 
 # ── Allowlist CRUD (also used by executor) ────────────────────────────────────

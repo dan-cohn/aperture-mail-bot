@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Dashboard VM control server
     dashboard_vm_control_url: str = ""  # e.g. http://1.2.3.4:9090
 
+    # Matter reading app
+    matter_api_key: str = ""  # set via MATTER_API_KEY in .env
+
     # Internal endpoint security
     internal_secret: str = ""  # set via INTERNAL_SECRET in .env
 

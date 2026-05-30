@@ -19,6 +19,7 @@ from notifications.telegram import TelegramNotifier
 from notifications.telegram_commands import handle_message
 from notifications.telegram_webhook import handle_callback
 from scheduler.digest import send_archive_digest, send_digest
+from scheduler.matter_reminder import send_matter_reminder
 from scheduler.llm_backoff import LLMBackoffManager
 from scheduler.snooze import process_snoozes
 from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
@@ -265,6 +266,18 @@ async def trigger_process_snoozes():
     """Re-fire alerts for expired snoozes. Triggered every 15 minutes."""
     count = await process_snoozes(db, telegram)
     return {"fired": count}
+
+
+@app.post(
+    "/internal/matter-reminder",
+    status_code=status.HTTP_200_OK,
+    tags=["internal"],
+    dependencies=[Depends(verify_internal_secret)],
+)
+async def trigger_matter_reminder():
+    """Send the Matter reading queue reminder. Triggered daily at 20:00."""
+    await send_matter_reminder(telegram)
+    return {"ok": True}
 
 
 @app.post(
