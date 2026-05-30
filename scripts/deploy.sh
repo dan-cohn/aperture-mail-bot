@@ -154,6 +154,32 @@ if [ "$QUICK" = false ]; then
       --role="roles/secretmanager.secretAccessor" \
       --project="$PROJECT_ID" --quiet
   done
+
+  echo "--- Applying Firestore indexes..."
+  while IFS= read -r index; do
+    collection=$(echo "$index" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['collectionGroup'])")
+    fields=$(echo "$index" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for f in d['fields']:
+  order = f.get('order', 'ASCENDING').lower()
+  print(f'--field-config=field-path={f[\"fieldPath\"]},order={order}')
+" | tr '\n' ' ')
+    # describe first; create only if missing (creation is async, errors on duplicate are safe to ignore)
+    gcloud firestore indexes composite list \
+      --project="$PROJECT_ID" --database="aperture-db" \
+      --format="value(name)" 2>/dev/null \
+      | grep -q "/$collection/" || \
+    eval gcloud firestore indexes composite create \
+      --project="$PROJECT_ID" --database="aperture-db" \
+      --collection-group="$collection" \
+      "$fields" --async --quiet 2>/dev/null && echo "  ✓ $collection" || true
+  done < <(python3 -c "
+import json, sys
+data = json.load(open('firestore.indexes.json'))
+for idx in data['indexes']:
+    print(json.dumps(idx))
+")
 fi
 
 # ── Step 6b: Sync prompts to Firestore (always runs) ─────────────────────────
