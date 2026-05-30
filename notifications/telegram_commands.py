@@ -10,7 +10,8 @@ Supported actions (extensible — add new handlers below):
   help               — list available commands
   query_history      — show recent triage decisions for a sender/domain
   add_correction     — add a confirmed correction rule for a sender
-  list_corrections   — show pending corrections with Approve buttons
+  list_corrections         — show pending corrections with Approve buttons
+  approve_all_corrections  — approve all pending corrections at once
   view_prompt        — show the current learned prompt
   modify_prompt      — generatively add/update a rule in the learned prompt
   query_stats        — show triage statistics for a time period
@@ -59,7 +60,8 @@ Actions:
   help               show available commands
   query_history      show recent triage decisions for a sender or domain
   add_correction     tell Aperture that emails from a sender belong in a different category
-  list_corrections   show corrections waiting for approval
+  list_corrections         show corrections waiting for approval
+  approve_all_corrections  approve all pending corrections at once
   view_prompt        show the current learned prompt rules
   modify_prompt      add or change a rule in the learned prompt
   query_stats        show triage statistics (count by action/category)
@@ -88,6 +90,8 @@ Examples:
     → {"action":"dashboard_stop","reply":"Stopping the dashboard."}
   "is the dashboard running?"
     → {"action":"dashboard_status","reply":"Checking dashboard status."}
+  "approve all corrections"
+    → {"action":"approve_all_corrections","reply":"Approving all pending corrections."}
 """
 
 _HELP_TEXT = """\
@@ -102,6 +106,7 @@ _HELP_TEXT = """\
 <b>Corrections</b>
   • "emails from x@example.com should be category 5"
   • "show pending corrections"
+  • "approve all corrections"
 
 <b>Prompt</b>
   • "show learned prompt"
@@ -180,6 +185,9 @@ async def handle_message(text: str, db: firestore.Client, telegram) -> None:
 
         elif action == "list_corrections":
             await _cmd_list_corrections(db, telegram)
+
+        elif action == "approve_all_corrections":
+            await _cmd_approve_all_corrections(db, telegram)
 
         elif action == "view_prompt":
             await _cmd_view_prompt(db, telegram)
@@ -353,6 +361,21 @@ async def _cmd_list_corrections(db, telegram) -> None:
         )
         keyboard = [[{"text": "✓ Approve", "callback_data": f"approve_correction:{doc.id}"}]]
         await telegram.send_with_keyboard(text, keyboard)
+
+
+async def _cmd_approve_all_corrections(db, telegram) -> None:
+    docs = list(
+        db.collection("aperture_corrections")
+        .where(filter=FieldFilter("confirmed", "==", False))
+        .stream()
+    )
+    if not docs:
+        await telegram.send_text("No pending corrections to approve.")
+        return
+    for doc in docs:
+        doc.reference.update({"confirmed": True, "confirmed_at": firestore.SERVER_TIMESTAMP})
+    logger.info(f"Approved all corrections: {len(docs)} docs")
+    await telegram.send_text(f"Approved {len(docs)} pending correction{'s' if len(docs) != 1 else ''}.")
 
 
 async def _cmd_view_prompt(db, telegram) -> None:
