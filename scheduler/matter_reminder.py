@@ -14,14 +14,7 @@ def _format_duration(total_seconds: int) -> str:
     return f"{h}h {m}m {s}s"
 
 
-async def get_matter_status() -> str:
-    """Fetch Matter queue stats and return a formatted Telegram message."""
-    client = MatterClient(settings.matter_api_key)
-    queue_items, reading_seconds = await asyncio.gather(
-        client.get_queue_items(),
-        client.get_reading_seconds_last_7_days(),
-    )
-
+def _build_matter_message(queue_items: list[dict], reading_seconds: int) -> str:
     count = len(queue_items)
     recent = [
         item.get("title") or item.get("url", "(untitled)")
@@ -44,13 +37,30 @@ async def get_matter_status() -> str:
     return "\n".join(lines)
 
 
+async def get_matter_status() -> str:
+    """Fetch Matter queue stats and return a formatted Telegram message."""
+    client = MatterClient(settings.matter_api_key)
+    queue_items, reading_seconds = await asyncio.gather(
+        client.get_queue_items(),
+        client.get_reading_seconds_last_7_days(),
+    )
+    return _build_matter_message(queue_items, reading_seconds)
+
+
 async def send_matter_reminder(telegram) -> None:
     if not settings.matter_api_key:
         logger.warning("MATTER_API_KEY not configured — skipping Matter reminder")
         return
     try:
-        message = await get_matter_status()
-        await telegram.send_text(message)
+        client = MatterClient(settings.matter_api_key)
+        queue_items, reading_seconds = await asyncio.gather(
+            client.get_queue_items(),
+            client.get_reading_seconds_last_7_days(),
+        )
+        if not queue_items:
+            logger.info("Matter reminder skipped — queue is empty.")
+            return
+        await telegram.send_text(_build_matter_message(queue_items, reading_seconds))
         logger.info("Matter reminder sent.")
     except Exception as exc:
         logger.error(f"Matter reminder failed: {exc}")
