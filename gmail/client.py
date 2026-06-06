@@ -2,10 +2,16 @@
 Thin wrapper around the Gmail API v1 service object.
 Centralises auth and service construction; avoids re-building per request.
 """
+import base64
+import logging
+import re
+
 from google.cloud import firestore
 from googleapiclient.discovery import build
 
 from auth.gmail_auth import get_valid_credentials
+
+logger = logging.getLogger(__name__)
 
 _USER = "me"
 _METADATA_HEADERS = ["From", "Subject", "Date"]
@@ -101,6 +107,52 @@ def modify_message(service, message_id: str, add_labels: list[str], remove_label
 def trash_message(service, message_id: str) -> dict:
     """Move a message to Trash."""
     return service.users().messages().trash(userId=_USER, id=message_id).execute()
+
+
+def get_otp_from_message(service, message_id: str) -> str | None:
+    """
+    Fetch the full message body and extract a one-time code if present.
+    Looks for digits adjacent to keywords like 'code', 'OTP', 'passcode', 'PIN'.
+    Returns None if no code is found or on any error.
+    """
+    try:
+        msg = get_message(service, message_id, fmt="full")
+        text = _extract_body_text(msg.get("payload", {}))
+        if not text:
+            return None
+        m = re.search(r'(?:code|passcode|otp|pin)[^a-zA-Z\d]*(\d{4,8})\b', text, re.IGNORECASE)
+        return m.group(1) if m else None
+    except Exception as exc:
+        logger.warning(f"OTP extraction failed for {message_id}: {exc}")
+        return None
+
+
+def _extract_body_text(payload: dict) -> str:
+    """Recursively extract plain text from a MIME payload, preferring text/plain."""
+    parts = payload.get("parts", [])
+
+    if not parts:
+        data = payload.get("body", {}).get("data", "")
+        if not data:
+            return ""
+        raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
+        if payload.get("mimeType") == "text/html":
+            return re.sub(r"<[^>]+>", " ", raw)
+        return raw
+
+    # Prefer text/plain parts before recursing into sub-parts
+    for part in parts:
+        if part.get("mimeType") == "text/plain":
+            data = part.get("body", {}).get("data", "")
+            if data:
+                return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
+
+    for part in parts:
+        text = _extract_body_text(part)
+        if text:
+            return text
+
+    return ""
 
 
 def get_or_create_label(service, name: str) -> str:

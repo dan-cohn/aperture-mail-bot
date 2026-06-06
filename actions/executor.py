@@ -12,7 +12,7 @@ import logging
 
 from google.cloud import firestore
 
-from gmail.client import get_or_create_label, modify_message, trash_message
+from gmail.client import get_or_create_label, get_otp_from_message, modify_message, trash_message
 from notifications.telegram import TelegramNotifier
 from notifications.telegram_commands import is_allowlisted
 from triage.schemas import TriageResult
@@ -65,7 +65,8 @@ async def execute(
         if label_id:
             add.append(label_id)
         modify_message(gmail_service, message_id, add_labels=add, remove_labels=[])
-        await telegram.send_alert(triage, sender, subject, message_id)
+        otp = get_otp_from_message(gmail_service, message_id)
+        await telegram.send_alert(triage, sender, subject, message_id, otp=otp)
 
     elif action == "SUMMARY":
         # Action B: label + leave unread + enqueue for the 07:30 / 17:30 digest

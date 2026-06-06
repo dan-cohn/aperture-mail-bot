@@ -47,6 +47,7 @@ class TelegramNotifier:
         sender: str,
         subject: str,
         message_id: str,
+        otp: str | None = None,
     ) -> None:
         """Send an immediate alert for Action A (categories 1–2)."""
         emoji = _CATEGORY_EMOJI.get(triage.category, "📧")
@@ -58,6 +59,8 @@ class TelegramNotifier:
             f"<b>Subject:</b> {_html(subject)}\n\n"
             f"{_html(triage.summary)}"
         )
+        if otp:
+            text += f"\n\n🔑 <b>Code: {otp}</b>"
 
         reply_markup = {
             "inline_keyboard": [
