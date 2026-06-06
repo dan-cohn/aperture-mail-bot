@@ -5,6 +5,7 @@ FastAPI entry point for Cloud Run.
 import base64
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -12,7 +13,7 @@ from google.cloud import firestore
 
 from actions.executor import execute
 from config import settings
-from gmail.client import build_gmail_service
+from gmail.client import build_gmail_service, get_enriched_snippet
 from gmail.pubsub_handler import process_notification
 from gmail.watch import setup_watch
 from notifications.telegram import TelegramNotifier
@@ -36,6 +37,13 @@ db: firestore.Client | None = None
 telegram: TelegramNotifier | None = None
 triage_client = None
 backoff_manager = LLMBackoffManager()
+
+# Subjects matching this pattern get full body text passed to the triage LLM
+# so it can extract codes, merchant names, amounts, etc. from HTML-heavy emails.
+_ENRICH_SUBJECT_RE = re.compile(
+    r"verification.code|one.time|passcode|\bOTP\b|suspicious|not.present|unauthorized|fraud",
+    re.IGNORECASE,
+)
 
 
 @asynccontextmanager
@@ -61,10 +69,16 @@ async def lifespan(app: FastAPI):
 async def _process_message(msg: dict) -> None:
     """Triage and execute a single message. Raises TriageUnavailableError on LLM 503."""
     gmail_service = build_gmail_service(db)
+    snippet = msg["snippet"]
+    if _ENRICH_SUBJECT_RE.search(msg["subject"]):
+        enriched = get_enriched_snippet(gmail_service, msg["id"])
+        if enriched:
+            snippet = enriched
+            logger.debug(f"Using enriched snippet for '{msg['subject'][:60]}'")
     triage_result = triage_client.triage(
         sender=msg["sender"],
         subject=msg["subject"],
-        snippet=msg["snippet"],
+        snippet=snippet,
         date=msg["date"],
     )
     await execute(

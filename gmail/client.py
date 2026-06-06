@@ -109,6 +109,23 @@ def trash_message(service, message_id: str) -> dict:
     return service.users().messages().trash(userId=_USER, id=message_id).execute()
 
 
+def get_enriched_snippet(service, message_id: str, max_chars: int = 1200) -> str | None:
+    """
+    Fetch full body text for pre-triage enrichment on alert-type emails.
+    Returns collapsed plain text (up to max_chars), or None on failure.
+    """
+    try:
+        msg = get_message(service, message_id, fmt="full")
+        text = _extract_body_text(msg.get("payload", {}))
+        if not text:
+            return None
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:max_chars]
+    except Exception as exc:
+        logger.warning(f"Body enrichment failed for {message_id}: {exc}")
+        return None
+
+
 def get_otp_from_message(service, message_id: str) -> str | None:
     """
     Fetch the full message body and extract a one-time code if present.
