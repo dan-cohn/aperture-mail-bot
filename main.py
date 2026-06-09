@@ -5,7 +5,6 @@ FastAPI entry point for Cloud Run.
 import base64
 import json
 import logging
-import re
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -38,13 +37,6 @@ telegram: TelegramNotifier | None = None
 triage_client = None
 backoff_manager = LLMBackoffManager()
 
-# Subjects matching this pattern get full body text passed to the triage LLM
-# so it can extract codes, merchant names, amounts, etc. from HTML-heavy emails.
-_ENRICH_SUBJECT_RE = re.compile(
-    r"verification.code|one.time|passcode|\bOTP\b|suspicious|not.present|unauthorized|fraud",
-    re.IGNORECASE,
-)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -69,18 +61,24 @@ async def lifespan(app: FastAPI):
 async def _process_message(msg: dict) -> None:
     """Triage and execute a single message. Raises TriageUnavailableError on LLM 503."""
     gmail_service = build_gmail_service(db)
-    snippet = msg["snippet"]
-    if _ENRICH_SUBJECT_RE.search(msg["subject"]):
-        enriched = get_enriched_snippet(gmail_service, msg["id"])
-        if enriched:
-            snippet = enriched
-            logger.debug(f"Using enriched snippet for '{msg['subject'][:60]}'")
     triage_result = triage_client.triage(
         sender=msg["sender"],
         subject=msg["subject"],
-        snippet=snippet,
+        snippet=msg["snippet"],
         date=msg["date"],
     )
+    # For ALERT emails, re-triage with the full body so the summary includes
+    # details like OTP codes, merchant names, and amounts buried in HTML.
+    if triage_result.action == "ALERT":
+        enriched = get_enriched_snippet(gmail_service, msg["id"])
+        if enriched:
+            logger.debug(f"Re-triaging ALERT with full body: '{msg['subject'][:60]}'")
+            triage_result = triage_client.triage(
+                sender=msg["sender"],
+                subject=msg["subject"],
+                snippet=enriched,
+                date=msg["date"],
+            )
     await execute(
         triage=triage_result,
         message_id=msg["id"],
