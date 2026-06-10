@@ -154,6 +154,11 @@ def _extract_body_text(payload: dict) -> str:
             return ""
         raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
         if payload.get("mimeType") == "text/html":
+            # Strip <style>/<script> blocks (including their content) and comments
+            # before stripping tags — otherwise CSS rules and conditional-comment
+            # markup dominate the text and bury the actual message content.
+            raw = re.sub(r"<(style|script)[^>]*>.*?</\1>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+            raw = re.sub(r"<!--.*?-->", " ", raw, flags=re.DOTALL)
             return re.sub(r"<[^>]+>", " ", raw)
         return raw
 
