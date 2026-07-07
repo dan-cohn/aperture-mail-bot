@@ -179,14 +179,26 @@ class GeminiTriageClient(BaseTriage):
             system_instruction=system,
             response_mime_type="application/json",
             temperature=0.1,
+            # This agent triages the user's own inbox. Gemini's default safety
+            # filters (BLOCK_MEDIUM_AND_ABOVE) block emotionally-charged but
+            # benign emails — e.g. Nextdoor posts about dementia, accidents,
+            # crime — returning an empty candidate (response.text is None).
+            # Disable them so every email gets a category.
+            safety_settings=[
+                types.SafetySetting(category=c, threshold="BLOCK_NONE")
+                for c in (
+                    "HARM_CATEGORY_HARASSMENT",
+                    "HARM_CATEGORY_HATE_SPEECH",
+                    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "HARM_CATEGORY_DANGEROUS_CONTENT",
+                )
+            ],
         )
 
-    def triage(self, sender: str, subject: str, snippet: str, date: str = "") -> TriageResult:
-        user_msg = build_user_message(sender, subject, snippet, date)
-
-        # API call — raise TriageUnavailableError on retriable 503/429 errors
+    def _generate(self, user_msg: str, subject: str):
+        """Call Gemini; raise TriageUnavailableError on retriable 503/429."""
         try:
-            response = self._client.models.generate_content(
+            return self._client.models.generate_content(
                 model=settings.gemini_model,
                 contents=user_msg,
                 config=self._get_config(),
@@ -197,6 +209,33 @@ class GeminiTriageClient(BaseTriage):
                 logger.warning(f"Triage 503 for '{subject[:60]}': {exc}")
                 raise TriageUnavailableError(exc_str) from exc
             logger.error(f"Triage API error for '{subject[:60]}': {exc}")
+            return None
+
+    def triage(self, sender: str, subject: str, snippet: str, date: str = "") -> TriageResult:
+        response = self._generate(build_user_message(sender, subject, snippet, date), subject)
+        if response is None:
+            return _FALLBACK
+
+        # A blocked/empty candidate (e.g. PROHIBITED_CONTENT, safety filter,
+        # MAX_TOKENS) yields response.text == None. The snippet body is usually
+        # what trips the content filter, so retry once on subject + sender only
+        # before giving up — that recovers a real category for most blocks.
+        if response.text is None and snippet:
+            block = getattr(response.prompt_feedback, "block_reason", None)
+            logger.warning(
+                f"Triage empty response for '{subject[:60]}' "
+                f"(block_reason={block}) — retrying without snippet."
+            )
+            response = self._generate(build_user_message(sender, subject, "", date), subject)
+            if response is None:
+                return _FALLBACK
+
+        if response.text is None:
+            block = getattr(response.prompt_feedback, "block_reason", None)
+            logger.error(
+                f"Triage still empty for '{subject[:60]}' "
+                f"(block_reason={block}) — using fallback."
+            )
             return _FALLBACK
 
         # Parse response
@@ -208,7 +247,7 @@ class GeminiTriageClient(BaseTriage):
                 f"action={result.action} | subject='{subject[:60]}'"
             )
             return result
-        except (json.JSONDecodeError, ValidationError) as exc:
+        except (json.JSONDecodeError, TypeError, ValidationError) as exc:
             logger.error(
                 f"Triage parse error for '{subject[:60]}': {exc}\n"
                 f"Raw LLM output: {getattr(response, 'text', 'N/A')}"
