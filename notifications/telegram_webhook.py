@@ -6,7 +6,8 @@ Handles inline button presses on Aperture alert messages:
   wrong:{gmail_id}:{orig_cat}              → show 12-category picker
   correct:{gmail_id}:{orig_cat}:{new_cat}  → store correction (confirmed=False)
   snooze:{gmail_id}                        → show snooze duration picker
-  snooze_for:{gmail_id}:{duration}         → store snooze (duration: 1, 4, or "morning")
+  snooze_for:{gmail_id}:{duration}         → store snooze
+                                             (duration: "15m", 1, 3, "tonight", "morning")
   cancel:{gmail_id}                        → dismiss picker, restore original buttons
   snooze_digest:{digest_type}              → show digest snooze duration picker
   snooze_digest_for:{digest_type}:{dur}    → store digest snooze
@@ -170,17 +171,66 @@ async def _store_correction(
     logger.info(f"Correction stored: {gmail_id} | {orig_cat}→{new_cat} | confirmed=False")
 
 
+_EVENING_HOUR = 19  # "Tonight"
+_MORNING_HOUR = 7   # "Tomorrow morning"
+
+# Snooze options shared by the alert and digest pickers, as (token, button label).
+# The first three render on one row; the two named times share the second row.
+_SNOOZE_OPTIONS = [
+    ("15m",     "💤 15m"),
+    ("1",       "💤 1h"),
+    ("3",       "💤 3h"),
+    ("tonight", "🌆 Tonight"),
+    ("morning", "🌅 Tomorrow morning"),
+]
+
+
+def _resolve_snooze(duration: str) -> tuple[datetime, str]:
+    """Map a picker token to (snooze_until in UTC, human label)."""
+    now_utc = datetime.now(timezone.utc)
+    user_tz = ZoneInfo(settings.timezone)
+    now_local = now_utc.astimezone(user_tz)
+
+    if duration == "15m":
+        return now_utc + timedelta(minutes=15), "15 minutes"
+
+    if duration == "tonight":
+        target = now_local.replace(
+            hour=_EVENING_HOUR, minute=0, second=0, microsecond=0
+        )
+        if target <= now_local:
+            # Already past 7pm — roll to tomorrow evening so it never fires instantly.
+            target += timedelta(days=1)
+            label = "tomorrow evening"
+        else:
+            label = "tonight"
+        return target.astimezone(timezone.utc), label
+
+    if duration == "morning":
+        target = (now_local + timedelta(days=1)).replace(
+            hour=_MORNING_HOUR, minute=0, second=0, microsecond=0
+        )
+        return target.astimezone(timezone.utc), "tomorrow morning"
+
+    hours = int(duration)
+    return now_utc + timedelta(hours=hours), f"{hours} hour{'s' if hours != 1 else ''}"
+
+
+def _snooze_keyboard(prefix: str, target: str, cancel_data: str) -> list:
+    """Build a snooze picker: 3 short options, then the 2 named times, then Cancel."""
+    def row(options):
+        return [
+            {"text": label, "callback_data": f"{prefix}:{target}:{token}"}
+            for token, label in options
+        ]
+    return [row(_SNOOZE_OPTIONS[:3]), row(_SNOOZE_OPTIONS[3:]),
+            [{"text": "✕ Cancel", "callback_data": cancel_data}]]
+
+
 async def _show_snooze_picker(
     query_id: str, chat_id, tg_msg_id: int, gmail_id: str
 ) -> None:
-    keyboard = [
-        [
-            {"text": "💤 1 hour",  "callback_data": f"snooze_for:{gmail_id}:1"},
-            {"text": "💤 4 hours", "callback_data": f"snooze_for:{gmail_id}:4"},
-        ],
-        [{"text": "🌅 Tomorrow morning", "callback_data": f"snooze_for:{gmail_id}:morning"}],
-        [{"text": "✕ Cancel", "callback_data": f"cancel:{gmail_id}"}],
-    ]
+    keyboard = _snooze_keyboard("snooze_for", gmail_id, f"cancel:{gmail_id}")
     await _answer(query_id, "Choose snooze duration:")
     await _edit_keyboard(chat_id, tg_msg_id, keyboard)
 
@@ -194,19 +244,7 @@ async def _store_snooze(
     db: firestore.Client,
 ) -> None:
     """Write a snooze entry to aperture_snoozes."""
-    now_utc = datetime.now(timezone.utc)
-    user_tz = ZoneInfo(settings.timezone)
-
-    if duration == "morning":
-        tomorrow_local = (datetime.now(user_tz) + timedelta(days=1)).replace(
-            hour=7, minute=30, second=0, microsecond=0
-        )
-        snooze_until = tomorrow_local.astimezone(timezone.utc)
-        label = "tomorrow morning"
-    else:
-        hours = int(duration)
-        snooze_until = now_utc + timedelta(hours=hours)
-        label = f"{hours} hour{'s' if hours != 1 else ''}"
+    snooze_until, label = _resolve_snooze(duration)
 
     original = _fetch_log_entry(db, gmail_id)
 
@@ -235,14 +273,9 @@ async def _store_snooze(
 async def _show_digest_snooze_picker(
     query_id: str, chat_id, tg_msg_id: int, digest_type: str
 ) -> None:
-    keyboard = [
-        [
-            {"text": "💤 1 hour",  "callback_data": f"snooze_digest_for:{digest_type}:1"},
-            {"text": "💤 4 hours", "callback_data": f"snooze_digest_for:{digest_type}:4"},
-        ],
-        [{"text": "🌅 Tomorrow morning", "callback_data": f"snooze_digest_for:{digest_type}:morning"}],
-        [{"text": "✕ Cancel", "callback_data": f"cancel_digest:{digest_type}"}],
-    ]
+    keyboard = _snooze_keyboard(
+        "snooze_digest_for", digest_type, f"cancel_digest:{digest_type}"
+    )
     await _answer(query_id, "Choose snooze duration:")
     await _edit_keyboard(chat_id, tg_msg_id, keyboard)
 
@@ -256,19 +289,8 @@ async def _store_digest_snooze(
     db: firestore.Client,
 ) -> None:
     """Write a digest snooze entry to aperture_snoozes."""
-    now_utc = datetime.now(timezone.utc)
+    snooze_until, label = _resolve_snooze(duration)
     user_tz = ZoneInfo(settings.timezone)
-
-    if duration == "morning":
-        tomorrow_local = (datetime.now(user_tz) + timedelta(days=1)).replace(
-            hour=7, minute=30, second=0, microsecond=0
-        )
-        snooze_until = tomorrow_local.astimezone(timezone.utc)
-        label = "tomorrow morning"
-    else:
-        hours = int(duration)
-        snooze_until = now_utc + timedelta(hours=hours)
-        label = f"{hours} hour{'s' if hours != 1 else ''}"
 
     db.collection("aperture_snoozes").add({
         "type":        "digest",
