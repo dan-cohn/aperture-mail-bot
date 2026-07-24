@@ -180,8 +180,8 @@ _SNOOZE_OPTIONS = [
     ("15m",     "💤 15m"),
     ("1",       "💤 1h"),
     ("3",       "💤 3h"),
-    ("tonight", "🌆 Tonight"),
-    ("morning", "🌅 Tomorrow morning"),
+    ("tonight", "🌆 7 PM"),
+    ("morning", "🌅 7 AM"),
 ]
 
 
