@@ -185,6 +185,19 @@ _SNOOZE_OPTIONS = [
 ]
 
 
+def _next_occurrence(
+    now_local: datetime, hour: int, today_label: str, tomorrow_label: str
+) -> tuple[datetime, str]:
+    """
+    Next time the local clock reads `hour`:00 — later today if it is still ahead,
+    otherwise tomorrow. Never skips a day, and never resolves to a past time.
+    """
+    target = now_local.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if target <= now_local:
+        return target + timedelta(days=1), tomorrow_label
+    return target, today_label
+
+
 def _resolve_snooze(duration: str) -> tuple[datetime, str]:
     """Map a picker token to (snooze_until in UTC, human label)."""
     now_utc = datetime.now(timezone.utc)
@@ -195,22 +208,16 @@ def _resolve_snooze(duration: str) -> tuple[datetime, str]:
         return now_utc + timedelta(minutes=15), "15 minutes"
 
     if duration == "tonight":
-        target = now_local.replace(
-            hour=_EVENING_HOUR, minute=0, second=0, microsecond=0
+        target, label = _next_occurrence(
+            now_local, _EVENING_HOUR, "tonight", "tomorrow evening"
         )
-        if target <= now_local:
-            # Already past 7pm — roll to tomorrow evening so it never fires instantly.
-            target += timedelta(days=1)
-            label = "tomorrow evening"
-        else:
-            label = "tonight"
         return target.astimezone(timezone.utc), label
 
     if duration == "morning":
-        target = (now_local + timedelta(days=1)).replace(
-            hour=_MORNING_HOUR, minute=0, second=0, microsecond=0
+        target, label = _next_occurrence(
+            now_local, _MORNING_HOUR, "this morning", "tomorrow morning"
         )
-        return target.astimezone(timezone.utc), "tomorrow morning"
+        return target.astimezone(timezone.utc), label
 
     hours = int(duration)
     return now_utc + timedelta(hours=hours), f"{hours} hour{'s' if hours != 1 else ''}"
