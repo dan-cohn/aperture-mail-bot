@@ -29,6 +29,38 @@ _CATEGORY_EMOJI = {
 _MAX_PER_CATEGORY = 10
 
 
+def _dedupe_by_subject(items: list[dict]) -> list[tuple[str, int]]:
+    """
+    Collapse items sharing a subject into (subject, count) pairs, preserving
+    first-seen order. Gmail groups these into one thread row, and subscriptions
+    delivered to several of the user's addresses arrive as near-identical copies,
+    so listing each one separately just pads the digest.
+    """
+    grouped: dict[str, list] = {}
+    for item in items:
+        subject = item.get("subject") or "(no subject)"
+        key = " ".join(subject.split()).casefold()
+        if key in grouped:
+            grouped[key][1] += 1
+        else:
+            grouped[key] = [subject, 1]
+    return [(subject, count) for subject, count in grouped.values()]
+
+
+def _render_items(items: list[dict]) -> list[str]:
+    """Render one category's bullet lines, deduped by subject with an (Nx) suffix."""
+    unique = _dedupe_by_subject(items)
+    lines = []
+    for subject, count in unique[:_MAX_PER_CATEGORY]:
+        suffix = f" ({count}x)" if count > 1 else ""
+        lines.append(f"  • {subject[:65]}{suffix}")
+
+    hidden = sum(count for _, count in unique[_MAX_PER_CATEGORY:])
+    if hidden:
+        lines.append(f"  <i>… and {hidden} more</i>")
+    return lines
+
+
 async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
     """
     Fetch undispatched summary items, send a grouped Telegram digest,
@@ -106,16 +138,7 @@ async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
         cat_name = CATEGORY_NAMES.get(cat, f"Category {cat}")
         lines.append(f"{emoji} <b>{cat_name}</b> ({len(items)})")
 
-        for item in items[:_MAX_PER_CATEGORY]:
-            subject = item.get("subject", "(no subject)")[:65]
-            sender = item.get("sender", "")
-            # Strip display name cruft, keep it short
-            sender_short = sender.split("<")[0].strip()[:30]
-            lines.append(f"  • {subject}")
-
-        if len(items) > _MAX_PER_CATEGORY:
-            lines.append(f"  <i>… and {len(items) - _MAX_PER_CATEGORY} more</i>")
-
+        lines.extend(_render_items(items))
         lines.append("")
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} waiting in your inbox.</i>")
@@ -173,13 +196,7 @@ async def send_archive_digest(db: firestore.Client, telegram: TelegramNotifier) 
         cat_name = CATEGORY_NAMES.get(cat, f"Category {cat}")
         lines.append(f"{emoji} <b>{cat_name}</b> ({len(items)})")
 
-        for item in items[:_MAX_PER_CATEGORY]:
-            subject = item.get("subject", "(no subject)")[:65]
-            lines.append(f"  • {subject}")
-
-        if len(items) > _MAX_PER_CATEGORY:
-            lines.append(f"  <i>… and {len(items) - _MAX_PER_CATEGORY} more</i>")
-
+        lines.extend(_render_items(items))
         lines.append("")
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} auto-archived since the last digest.</i>")
