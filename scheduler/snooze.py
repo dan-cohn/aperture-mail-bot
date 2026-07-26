@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 from google.cloud import firestore
 from google.cloud.firestore_v1 import FieldFilter
 
+from gmail.client import build_gmail_service
 from notifications.telegram import TelegramNotifier
 from scheduler.digest import send_archive_digest, send_digest
+from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
 from triage.schemas import TriageResult
 
 logger = logging.getLogger(__name__)
@@ -41,10 +43,13 @@ async def process_snoozes(db: firestore.Client, telegram: TelegramNotifier) -> i
             continue  # still sleeping
 
         if data.get("type") == "digest":
-            # Re-run the digest — filtering handles any changes since snooze
+            # Re-run the sender — it rebuilds from the current queue/label, so any
+            # changes made during the snooze are reflected in the re-fired message.
             digest_type = data.get("digest_type", "evening")
             if digest_type == "morning":
                 await send_archive_digest(db, telegram)
+            elif digest_type == "unsubscribe":
+                await send_unsubscribe_reminder(db, build_gmail_service(db), telegram)
             else:
                 await send_digest(db, telegram)
             logger.info(f"Digest snooze re-fired: type={digest_type}")

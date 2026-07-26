@@ -88,6 +88,6 @@ async def send_unsubscribe_reminder(
 
     lines.append(f'\n<a href="{_GMAIL_LABEL_URL}">Review in Gmail →</a>')
 
-    await telegram.send_text("\n".join(lines))
+    await telegram.send_digest_with_snooze("\n".join(lines), "unsubscribe")
     logger.info("Unsubscribe reminder sent: ~%d messages.", total)
     return total
