@@ -8,6 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
 from actions.executor import execute
@@ -60,6 +61,33 @@ async def lifespan(app: FastAPI):
 
 async def _process_message(msg: dict) -> None:
     """Triage and execute a single message. Raises TriageUnavailableError on LLM 503."""
+    # Pub/Sub can redeliver the same history record, which would triage and alert
+    # the message twice. create() on a deterministic doc id is atomic, so only the
+    # first delivery gets past this point.
+    claim = db.collection("aperture_processed").document(msg["id"])
+    try:
+        claim.create({
+            "processed_at": firestore.SERVER_TIMESTAMP,
+            "subject": msg.get("subject", "")[:120],
+        })
+    except AlreadyExists:
+        logger.info(f"Duplicate delivery for {msg['id']} — already processed, skipping.")
+        return
+
+    try:
+        await _triage_and_execute(msg)
+    except Exception:
+        # Release the claim so a retry (LLM backoff queue, Pub/Sub redelivery)
+        # can process this message instead of being skipped as a duplicate.
+        try:
+            claim.delete()
+        except Exception as exc:
+            logger.warning(f"Could not release claim for {msg['id']}: {exc}")
+        raise
+
+
+async def _triage_and_execute(msg: dict) -> None:
+    """Run triage for a single message and carry out the resulting action."""
     gmail_service = build_gmail_service(db)
     triage_result = triage_client.triage(
         sender=msg["sender"],

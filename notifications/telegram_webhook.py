@@ -83,7 +83,7 @@ async def handle_callback(callback_query: dict, db: firestore.Client) -> None:
         elif action == "cancel" and len(parts) >= 2:
             gmail_id = parts[1]
             await _answer(query_id, "Cancelled.")
-            await _restore_alert_buttons(chat_id, tg_msg_id, gmail_id)
+            await _restore_alert_buttons(chat_id, tg_msg_id, gmail_id, db)
 
         elif action == "snooze_digest" and len(parts) == 2:
             digest_type = parts[1]
@@ -171,6 +171,11 @@ async def _store_correction(
     logger.info(f"Correction stored: {gmail_id} | {orig_cat}→{new_cat} | confirmed=False")
 
 
+# Cloud Scheduler runs /internal/process-snoozes on this cadence, so a snooze
+# can only ever ring on a tick boundary. Round the confirmation up to the next
+# tick rather than promising a time the processor cannot hit.
+_TICK_MINUTES = 5
+
 _EVENING_HOUR = 19  # "Tonight"
 _MORNING_HOUR = 7   # "Tomorrow morning"
 
@@ -196,6 +201,17 @@ def _next_occurrence(
     if target <= now_local:
         return target + timedelta(days=1), tomorrow_label
     return target, today_label
+
+
+def _ring_time_str(snooze_until: datetime) -> str:
+    """Format the earliest tick at which the processor can actually fire this."""
+    local = snooze_until.astimezone(ZoneInfo(settings.timezone))
+    if local.second or local.microsecond:
+        local = local.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    overshoot = local.minute % _TICK_MINUTES
+    if overshoot:
+        local += timedelta(minutes=_TICK_MINUTES - overshoot)
+    return local.strftime("%I:%M %p %Z").lstrip("0")
 
 
 def _resolve_snooze(duration: str) -> tuple[datetime, str]:
@@ -267,9 +283,7 @@ async def _store_snooze(
         "created_at":    firestore.SERVER_TIMESTAMP,
     })
 
-    local_tz = ZoneInfo(settings.timezone)
-    until_local = snooze_until.astimezone(local_tz)
-    until_str = until_local.strftime("%I:%M %p %Z").lstrip("0")
+    until_str = _ring_time_str(snooze_until)
     await _answer(query_id, f"Snoozed for {label}.")
     await _edit_keyboard(chat_id, tg_msg_id, [[
         {"text": f"💤 Snoozed — rings at {until_str}", "callback_data": "noop"}
@@ -297,18 +311,25 @@ async def _store_digest_snooze(
 ) -> None:
     """Write a digest snooze entry to aperture_snoozes."""
     snooze_until, label = _resolve_snooze(duration)
-    user_tz = ZoneInfo(settings.timezone)
 
-    db.collection("aperture_snoozes").add({
-        "type":        "digest",
-        "digest_type": digest_type,
+    # Store the exact message we are deferring. Re-running the digest builder on
+    # expiry would rebuild from the queue, but this digest's items were already
+    # marked dispatched when it was first sent — so the rebuild would show only
+    # newly-arrived mail, or nothing. Re-sending the captured text is faithful.
+    entry = {
+        "type":         "digest",
+        "digest_type":  digest_type,
         "snooze_until": snooze_until,
         "sent":         False,
         "created_at":   firestore.SERVER_TIMESTAMP,
-    })
+    }
+    last = db.collection("aperture_digest_last").document(digest_type).get()
+    if last.exists and last.to_dict().get("text"):
+        entry["text"] = last.to_dict()["text"]
 
-    until_local = snooze_until.astimezone(user_tz)
-    until_str = until_local.strftime("%I:%M %p %Z").lstrip("0")
+    db.collection("aperture_snoozes").add(entry)
+
+    until_str = _ring_time_str(snooze_until)
     await _answer(query_id, f"Snoozed for {label}.")
     await _edit_keyboard(chat_id, tg_msg_id, [[
         {"text": f"💤 Snoozed — rings at {until_str}", "callback_data": "noop"}
@@ -347,12 +368,19 @@ async def _restore_digest_snooze_button(chat_id, tg_msg_id: int, digest_type: st
     ]])
 
 
-async def _restore_alert_buttons(chat_id, tg_msg_id: int, gmail_id: str) -> None:
+async def _restore_alert_buttons(
+    chat_id, tg_msg_id: int, gmail_id: str, db: firestore.Client | None = None
+) -> None:
     """Restore the original Open / Snooze / Wrong Category buttons."""
+    # Recover the real category from the triage log; hardcoding 0 here would
+    # make a cancelled snooze report a bogus original category to the corrector.
+    orig_cat = 0
+    if db is not None:
+        orig_cat = _fetch_log_entry(db, gmail_id).get("category", 0) or 0
     await _edit_keyboard(chat_id, tg_msg_id, [[
         {"text": "📬 Open in Gmail",    "url": _GMAIL_URL.format(gmail_id)},
         {"text": "💤 Snooze",           "callback_data": f"snooze:{gmail_id}"},
-        {"text": "❌ Wrong Category",   "callback_data": f"wrong:{gmail_id}:0"},
+        {"text": "❌ Wrong Category",   "callback_data": f"wrong:{gmail_id}:{orig_cat}"},
     ]])
 
 

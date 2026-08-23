@@ -318,6 +318,9 @@ if [ "$QUICK" = false ]; then
     echo "  ✓ $job_name ($schedule)"
   }
 
+  # Cadence must stay in sync with _TICK_MINUTES in notifications/telegram_webhook.py,
+  # which rounds the "rings at" confirmation up to the next run of this job.
+  upsert_scheduler_job "aperture-process-snoozes" "*/5 * * * *" "$SERVICE_URL/internal/process-snoozes" "Re-fire expired snoozes"
   upsert_scheduler_job "aperture-digest-morning"  "30 7 * * *"  "$SERVICE_URL/internal/digest/morning"   "Morning archive digest"
   upsert_scheduler_job "aperture-digest-evening"  "30 17 * * *" "$SERVICE_URL/internal/digest/evening"   "Evening inbox digest"
   upsert_scheduler_job "aperture-matter-reminder" "0 20 * * *"  "$SERVICE_URL/internal/matter-reminder"  "Matter reading queue reminder"

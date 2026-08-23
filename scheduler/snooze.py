@@ -43,16 +43,26 @@ async def process_snoozes(db: firestore.Client, telegram: TelegramNotifier) -> i
             continue  # still sleeping
 
         if data.get("type") == "digest":
-            # Re-run the sender — it rebuilds from the current queue/label, so any
-            # changes made during the snooze are reflected in the re-fired message.
             digest_type = data.get("digest_type", "evening")
-            if digest_type == "morning":
+            text = data.get("text")
+            if text:
+                # Re-send the exact message that was snoozed. Rebuilding would be
+                # wrong for the morning/evening digests: their items were marked
+                # dispatched when first sent, so a rebuild shows only newly-arrived
+                # mail — or nothing at all — silently losing what was deferred.
+                await telegram.send_digest_with_snooze(text, digest_type)
+            elif digest_type == "morning":
                 await send_archive_digest(db, telegram)
             elif digest_type == "unsubscribe":
+                # No captured text: this one rebuilds from the Gmail label, which
+                # is self-filtering, so a fresh build is both correct and current.
                 await send_unsubscribe_reminder(db, build_gmail_service(db), telegram)
             else:
                 await send_digest(db, telegram)
-            logger.info(f"Digest snooze re-fired: type={digest_type}")
+            logger.info(
+                f"Digest snooze re-fired: type={digest_type} "
+                f"({'verbatim' if text else 'rebuilt'})"
+            )
         else:
             # Reconstruct a minimal TriageResult for the alert
             triage = TriageResult(

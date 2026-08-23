@@ -29,6 +29,22 @@ _CATEGORY_EMOJI = {
 _MAX_PER_CATEGORY = 10
 
 
+def _save_last_digest(db: firestore.Client, digest_type: str, text: str) -> None:
+    """
+    Remember the exact rendered digest so a snooze can re-send it verbatim.
+    Without this, a snoozed digest would rebuild from the queue — but the
+    original send already marked those items dispatched, so the rebuild would
+    show only newly-arrived mail, or nothing at all.
+    """
+    try:
+        db.collection("aperture_digest_last").document(digest_type).set({
+            "text": text,
+            "sent_at": firestore.SERVER_TIMESTAMP,
+        })
+    except Exception as exc:
+        logger.warning(f"Could not save last {digest_type} digest: {exc}")
+
+
 def _dedupe_by_subject(items: list[dict]) -> list[tuple[str, int]]:
     """
     Collapse items sharing a subject into (subject, count) pairs, preserving
@@ -143,7 +159,9 @@ async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} waiting in your inbox.</i>")
 
-    await telegram.send_digest_with_snooze("\n".join(lines), "evening")
+    text = "\n".join(lines)
+    _save_last_digest(db, "evening", text)
+    await telegram.send_digest_with_snooze(text, "evening")
 
     # Mark all dispatched in a single batch write (inbox items + stale items)
     batch = db.batch()
@@ -201,7 +219,9 @@ async def send_archive_digest(db: firestore.Client, telegram: TelegramNotifier) 
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} auto-archived since the last digest.</i>")
 
-    await telegram.send_digest_with_snooze("\n".join(lines), "morning")
+    text = "\n".join(lines)
+    _save_last_digest(db, "morning", text)
+    await telegram.send_digest_with_snooze(text, "morning")
 
     # Mark all dispatched
     batch = db.batch()
