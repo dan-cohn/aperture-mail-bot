@@ -43,6 +43,11 @@ _FALLBACK = TriageResult(
     suggested_action="INBOX",
 )
 
+# Hard ceiling on a single Gemini request. The sync client has no default
+# timeout, so on 2026-09-25 a hung connection blocked the event loop forever and
+# took the whole service down — /health included. Never leave this unset.
+_REQUEST_TIMEOUT_MS = 45_000
+
 _CACHE_TTL = 300.0  # 5 minutes for all caches
 
 # (core, learned, timestamp)
@@ -168,7 +173,10 @@ class BaseTriage(ABC):
 class GeminiTriageClient(BaseTriage):
     def __init__(self, db=None):
         self._db = db
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        self._client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=types.HttpOptions(timeout=_REQUEST_TIMEOUT_MS),
+        )
 
     def _get_config(self) -> types.GenerateContentConfig:
         core, learned = _load_prompts(self._db)
@@ -205,8 +213,12 @@ class GeminiTriageClient(BaseTriage):
             )
         except Exception as exc:
             exc_str = str(exc)
-            if any(s in exc_str for s in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")):
-                logger.warning(f"Triage 503 for '{subject[:60]}': {exc}")
+            lowered = exc_str.lower()
+            retriable = any(
+                s in exc_str for s in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")
+            ) or any(s in lowered for s in ("timeout", "timed out", "deadline"))
+            if retriable:
+                logger.warning(f"Triage unavailable for '{subject[:60]}': {exc}")
                 raise TriageUnavailableError(exc_str) from exc
             logger.error(f"Triage API error for '{subject[:60]}': {exc}")
             return None

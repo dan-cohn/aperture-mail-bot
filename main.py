@@ -2,6 +2,7 @@
 Aperture — Personal Gmail Triage Agent
 FastAPI entry point for Cloud Run.
 """
+import asyncio
 import base64
 import json
 import logging
@@ -88,8 +89,15 @@ async def _process_message(msg: dict) -> None:
 
 async def _triage_and_execute(msg: dict) -> None:
     """Run triage for a single message and carry out the resulting action."""
-    gmail_service = build_gmail_service(db)
-    triage_result = triage_client.triage(
+    # The Gmail and Gemini clients are synchronous. Calling them directly from
+    # this coroutine runs their network I/O on the event loop, so a single slow
+    # or hung call stalls every other request the container is serving — that is
+    # how one wedged Gemini call took the whole service down on 2026-09-25.
+    # Hand them to worker threads so the loop stays free to answer /health,
+    # Telegram callbacks, and other webhooks.
+    gmail_service = await asyncio.to_thread(build_gmail_service, db)
+    triage_result = await asyncio.to_thread(
+        triage_client.triage,
         sender=msg["sender"],
         subject=msg["subject"],
         snippet=msg["snippet"],
@@ -98,10 +106,11 @@ async def _triage_and_execute(msg: dict) -> None:
     # For ALERT emails, re-triage with the full body so the summary includes
     # details like OTP codes, merchant names, and amounts buried in HTML.
     if triage_result.action == "ALERT":
-        enriched = get_enriched_snippet(gmail_service, msg["id"])
+        enriched = await asyncio.to_thread(get_enriched_snippet, gmail_service, msg["id"])
         if enriched:
             logger.debug(f"Re-triaging ALERT with full body: '{msg['subject'][:60]}'")
-            triage_result = triage_client.triage(
+            triage_result = await asyncio.to_thread(
+                triage_client.triage,
                 sender=msg["sender"],
                 subject=msg["subject"],
                 snippet=enriched,
