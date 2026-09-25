@@ -201,6 +201,10 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory=512Mi \
   --cpu=1 \
   --timeout=120 \
+  `# Liveness probe: Cloud Run reports a container Ready as long as the process` \
+  `# is up, so on 2026-09-25 a wedged event loop served 504s for two hours` \
+  `# without being replaced. Probing /health kills a hung container in ~90s.` \
+  --liveness-probe="httpGet.path=/health,initialDelaySeconds=30,periodSeconds=30,timeoutSeconds=5,failureThreshold=3" \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE=aperture-db,PUBSUB_TOPIC=aperture-gmail-push,PUBSUB_SUBSCRIPTION=aperture-gmail-push-sub,LLM_PROVIDER=gemini,GEMINI_MODEL=gemini-2.5-flash,TIMEZONE=America/Chicago,LOG_LEVEL=INFO,ENVIRONMENT=production,CLOUD_RUN_REGION=$REGION,DASHBOARD_VM_CONTROL_URL=$DASHBOARD_VM_CONTROL_URL" \
   --set-secrets="TELEGRAM_BOT_TOKEN=aperture-TELEGRAM_BOT_TOKEN:latest,TELEGRAM_CHAT_ID=aperture-TELEGRAM_CHAT_ID:latest,GEMINI_API_KEY=aperture-GEMINI_API_KEY:latest,INTERNAL_SECRET=aperture-INTERNAL_SECRET:latest,TELEGRAM_WEBHOOK_SECRET=aperture-TELEGRAM_WEBHOOK_SECRET:latest,MATTER_API_KEY=aperture-MATTER_API_KEY:latest"
 
