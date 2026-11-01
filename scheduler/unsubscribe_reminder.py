@@ -50,7 +50,16 @@ async def send_unsubscribe_reminder(
         .execute()
     )
     message_stubs = response.get("messages", [])
-    total = response.get("resultSizeEstimate", len(message_stubs))
+
+    # resultSizeEstimate is an estimate, not a count — Gmail parks at a stable
+    # ~201 for any large result set, so this reminder reported 201 unread when
+    # there were 131. The label's own counter is exact.
+    try:
+        meta = gmail_service.users().labels().get(userId="me", id=label_id).execute()
+        total = meta.get("messagesUnread", len(message_stubs))
+    except Exception as exc:
+        logger.warning("Could not read exact unread count for %s: %s", _LABEL_NAME, exc)
+        total = len(message_stubs)
 
     if not message_stubs:
         logger.info("Unsubscribe reminder: no unread messages in label.")

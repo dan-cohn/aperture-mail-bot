@@ -25,8 +25,24 @@ _CATEGORY_EMOJI = {
     5: "📰",
 }
 
-# Maximum items shown per category before truncating
-_MAX_PER_CATEGORY = 10
+# Maximum unique subjects shown per category before truncating
+_MAX_PER_CATEGORY = 20
+
+# Telegram rejects a sendMessage body over 4096 characters, which would fail the
+# whole digest rather than shorten it. Leave headroom and trim if we get close.
+_TELEGRAM_MAX_CHARS = 3900
+
+
+def _fit_telegram(text: str) -> str:
+    """Trim a digest to something Telegram will accept, whole lines at a time."""
+    if len(text) <= _TELEGRAM_MAX_CHARS:
+        return text
+    notice = "\n<i>… digest truncated to fit Telegram's message limit.</i>"
+    lines = text.split("\n")
+    while lines and len("\n".join(lines)) + len(notice) > _TELEGRAM_MAX_CHARS:
+        lines.pop()
+    logger.warning("Digest exceeded Telegram's limit — truncated.")
+    return "\n".join(lines) + notice
 
 
 def _save_last_digest(db: firestore.Client, digest_type: str, text: str) -> None:
@@ -159,7 +175,7 @@ async def send_digest(db: firestore.Client, telegram: TelegramNotifier) -> int:
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} waiting in your inbox.</i>")
 
-    text = "\n".join(lines)
+    text = _fit_telegram("\n".join(lines))
     _save_last_digest(db, "evening", text)
     await telegram.send_digest_with_snooze(text, "evening")
 
@@ -219,7 +235,7 @@ async def send_archive_digest(db: firestore.Client, telegram: TelegramNotifier) 
 
     lines.append(f"<i>{total} email{'s' if total != 1 else ''} auto-archived since the last digest.</i>")
 
-    text = "\n".join(lines)
+    text = _fit_telegram("\n".join(lines))
     _save_last_digest(db, "morning", text)
     await telegram.send_digest_with_snooze(text, "morning")
 
