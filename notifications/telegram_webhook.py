@@ -14,6 +14,7 @@ Handles inline button presses on Aperture alert messages:
   cancel_digest:{digest_type}              → dismiss picker, restore snooze button
   noop                                     → silently acknowledge (disabled buttons)
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -162,6 +163,21 @@ async def _store_correction(
         "confirmed":            False,
         "created_at":           firestore.SERVER_TIMESTAMP,
     })
+
+    # Reset the thread floor. The thread's Gmail label is what later replies are
+    # ranked against, so leaving the wrong label in place would keep forcing
+    # replies back to the category the user just rejected.
+    thread_id = original.get("thread_id")
+    if thread_id:
+        try:
+            from actions.executor import relabel_thread_category
+            from gmail.client import build_gmail_service
+
+            service = await asyncio.to_thread(build_gmail_service, db)
+            await asyncio.to_thread(relabel_thread_category, service, thread_id, new_cat)
+            logger.info(f"Thread {thread_id} relabelled to cat {new_cat} after correction.")
+        except Exception as exc:
+            logger.warning(f"Could not relabel thread {thread_id} after correction: {exc}")
 
     new_name = CATEGORY_NAMES.get(new_cat, str(new_cat))
     await _answer(query_id, f"Saved! Marked as [{new_cat}] {new_name}")

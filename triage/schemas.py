@@ -32,6 +32,34 @@ ACTION_MAP = {
     12: "TRASH",        # Action F
 }
 
+# How prominently each action surfaces an email, most prominent first.
+# Category number alone is NOT a safe ranking: cat 8 (Planning) archives while
+# cat 9 (Reading) stays in the inbox, so comparing numbers would let a reply
+# archive a thread that was previously visible.
+ACTION_RANK = {
+    "ALERT":       0,
+    "SUMMARY":     1,
+    "INBOX":       2,
+    "ARCHIVE":     3,
+    "UNSUBSCRIBE": 4,
+    "TRASH":       5,
+}
+
+
+def category_rank(category: int) -> tuple[int, int]:
+    """
+    Sort key for how prominently a category surfaces an email, best first.
+    Ranks by action visibility, then by category number to break ties.
+    A *smaller* tuple outranks a larger one.
+    """
+    action = ACTION_MAP.get(category, "INBOX")
+    return (ACTION_RANK.get(action, 2), category)
+
+
+def outranks(a: int, b: int) -> bool:
+    """True if category *a* surfaces an email more prominently than category *b*."""
+    return category_rank(a) < category_rank(b)
+
 
 class TriageResult(BaseModel):
     category: int = Field(ge=1, le=12)

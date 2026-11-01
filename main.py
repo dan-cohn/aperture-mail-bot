@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
-from actions.executor import execute
+from actions.executor import execute, get_thread_floor
 from config import settings
 from gmail.client import build_gmail_service, get_enriched_snippet
 from gmail.pubsub_handler import process_notification
@@ -26,6 +26,7 @@ from scheduler.llm_backoff import LLMBackoffManager
 from scheduler.snooze import process_snoozes
 from scheduler.unsubscribe_reminder import send_unsubscribe_reminder
 from triage.llm_client import TriageUnavailableError, get_triage_client
+from triage.schemas import TriageResult, outranks
 
 logging.basicConfig(
     level=settings.log_level,
@@ -87,6 +88,31 @@ async def _process_message(msg: dict) -> None:
         raise
 
 
+def _apply_thread_floor(triage: TriageResult, floor: int | None, msg: dict) -> TriageResult:
+    """
+    Never let a reply rank a thread lower than it was already classified.
+
+    Each message is triaged on its own, so a reply can read as routine even when
+    the thread is already urgent. "Re: Shabbat November 7" assigned the user a
+    Torah reading and was archived as cat 8, because the reply mentioned a date
+    20 days out, while the thread it replied to was a cat 2 alert.
+    """
+    if floor is None or not outranks(floor, triage.category):
+        return triage
+    logger.info(
+        f"Thread floor held cat {triage.category} at cat {floor} "
+        f"(thread={msg['thread_id']}): '{msg.get('subject', '')[:50]}'"
+    )
+    return triage.model_copy(update={
+        "category": floor,
+        "is_urgent": floor <= 2,
+        "reasoning": (
+            f"{triage.reasoning} [Thread floor: this thread was already "
+            f"classified cat {floor}; a reply may not lower it.]"
+        ),
+    })
+
+
 async def _triage_and_execute(msg: dict) -> None:
     """Run triage for a single message and carry out the resulting action."""
     # The Gmail and Gemini clients are synchronous. Calling them directly from
@@ -96,6 +122,8 @@ async def _triage_and_execute(msg: dict) -> None:
     # Hand them to worker threads so the loop stays free to answer /health,
     # Telegram callbacks, and other webhooks.
     gmail_service = await asyncio.to_thread(build_gmail_service, db)
+    # Read the floor before triaging: execute() rewrites the thread's labels.
+    floor = await asyncio.to_thread(get_thread_floor, gmail_service, msg["thread_id"])
     triage_result = await asyncio.to_thread(
         triage_client.triage,
         sender=msg["sender"],
@@ -103,6 +131,7 @@ async def _triage_and_execute(msg: dict) -> None:
         snippet=msg["snippet"],
         date=msg["date"],
     )
+    triage_result = _apply_thread_floor(triage_result, floor, msg)
     # For ALERT emails, re-triage with the full body so the summary includes
     # details like OTP codes, merchant names, and amounts buried in HTML.
     if triage_result.action == "ALERT":
@@ -116,6 +145,8 @@ async def _triage_and_execute(msg: dict) -> None:
                 snippet=enriched,
                 date=msg["date"],
             )
+            # Re-apply: the second pass can demote just as the first one can.
+            triage_result = _apply_thread_floor(triage_result, floor, msg)
     await execute(
         triage=triage_result,
         message_id=msg["id"],
