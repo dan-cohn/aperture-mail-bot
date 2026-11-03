@@ -1,7 +1,7 @@
 """
 Pluggable LLM client for email triage.
 
-Default: Gemini 2.5 Flash via google-genai (model configurable via GEMINI_MODEL in .env).
+Default: Gemini 3.5 Flash Lite via google-genai (model configurable via GEMINI_MODEL in .env).
 Adding a new provider: subclass BaseTriage and register it in get_triage_client().
 
 System prompt assembly (in order):

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # LLM
     gemini_api_key: str
     llm_provider: str = "gemini"          # "gemini" | "claude" | "openai"
-    gemini_model: str = "gemini-2.5-flash"  # override via GEMINI_MODEL in .env
+    gemini_model: str = "gemini-3.5-flash-lite"  # override via GEMINI_MODEL in .env
 
     # Cloud Run (set after first deployment)
     cloud_run_url: str = ""  # e.g. https://aperture-xxxx-uc.a.run.app

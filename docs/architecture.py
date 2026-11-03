@@ -38,7 +38,7 @@ with Diagram(
     # ── External ──────────────────────────────────────────────────────────────
     gmail    = Users("Gmail API")
     telegram = Telegram("Telegram")
-    gemini   = AIPlatform("Gemini 2.5 Flash\n(AI Dev API)")
+    gemini   = AIPlatform("Gemini 3.5 Flash Lite\n(AI Dev API)")
     user     = Users("User\n(Browser)")
     cf       = Cloudflare("Cloudflare\nTunnel")
 
